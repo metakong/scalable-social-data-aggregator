@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVS - App Factory Control</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Veiled Vector Space // App Factory Control</h1>
+        </header>
+
+        <div class="status-panel">
+            <h2>System Status</h2>
+            <div id="api-status" class="status-item">API: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <div id="db-status" class="status-item">Database: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <div id="redis-status" class="status-item">Task Queue: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <button id="start-cycle-btn">FORCE NEW DISCOVERY CYCLE</button>
+        </div>
+
+        <div class="progress-panel">
+            <h2>Discovery Progress</h2>
+            <div class="progress-bar-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <span id="progress-text">Idle</span>
+        </div>
+
+        <div class="main-content">
+            <div class="idea-column">
+                <h2>Idea Review Queue</h2>
+                <div id="idea-queue">
+                    <p id="loading-message">Loading ideas...</p>
+                </div>
+            </div>
+            <div class="log-column">
+                <h2>Live Task Log</h2>
+                <div id="log-viewer" class="log-viewer"></div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+
+</html>

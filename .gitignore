@@ -1,0 +1,29 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# Docker
+.dockerignore
+docker-compose.local.yml
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+*.py[cod]
+*$py.class
+
+*.venv
+
+# OS-specific files
+.DS_Store

@@ -1,0 +1,22 @@
+flask
+gunicorn
+gevent
+flask-socketio
+gevent-websocket
+SQLAlchemy
+Flask-SQLAlchemy
+Flask-Migrate
+psycopg2-binary
+celery
+redis
+requests
+playwright
+python-dotenv
+sqlalchemy-stubs
+types-redis
+psycogreen
+google-generativeai
+google-api-python-client
+praw
+# The httpx dependency is required by the Mumsnet scraper
+httpx
