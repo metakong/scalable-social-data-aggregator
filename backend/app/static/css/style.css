@@ -133,7 +133,7 @@ header h1 {
     overflow-y: scroll;
     padding: 1rem;
     font-family: 'Courier New', Courier, monospace;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     color: var(--text-secondary);
     white-space: pre-wrap;
     line-height: 1.5;
@@ -201,3 +201,137 @@ header h1 {
     color: var(--text-secondary);
     padding: 3rem;
 }
+
+/* --- Styles for Enhanced Idea Card --- */
+
+.idea-card h4 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    font-weight: 400;
+    color: var(--text-color);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+}
+
+.analysis-box {
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.swot-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.swot-item {
+    background-color: #2a2a2a;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.swot-item h5 {
+    margin-top: 0;
+    margin-bottom: 0.75rem;
+    color: var(--primary-color);
+    font-weight: 500;
+}
+
+.swot-list {
+    padding-left: 1em;
+    margin: 0;
+    list-style-type: none;
+    color: var(--text-secondary);
+}
+
+.swot-list li {
+    position: relative;
+    padding-left: 1.2em;
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+}
+
+.swot-list li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--primary-color);
+    font-weight: bold;
+}
+
+.ceo-action-panel {
+    border-top: 2px solid var(--border-color);
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+}
+
+.ceo-action-panel h4 {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 1rem;
+}
+
+.feedback-textarea {
+    width: 100%;
+    min-height: 80px;
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.75rem;
+    color: var(--text-color);
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+    margin-bottom: 1rem;
+    box-sizing: border-box;
+}
+
+.feedback-textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.action-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+}
+
+.btn {
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    color: #000;
+}
+
+.approve-btn {
+    background-color: var(--status-ok);
+}
+
+.approve-btn:hover {
+    background-color: #00c853;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 230, 118, 0.2);
+}
+
+.reject-btn {
+    background-color: var(--status-error);
+}
+
+.reject-btn:hover {
+    background-color: #ff1744;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(255, 82, 82, 0.2);

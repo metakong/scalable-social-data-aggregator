@@ -27,15 +27,21 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    # The command is now handled by the robust entrypoint.sh script.
     command: entrypoint.sh gunicorn --bind 0.0.0.0:8000 --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker "wsgi:app"
     volumes:
       - ./backend:/home/app/web
+      - ~/.config/gcloud:/home/app/.config/gcloud:ro
     ports:
       - "8000:8000"
     user: "${UID}:${GID}"
     env_file:
       - .env
+    environment:
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/home/app/.config/gcloud/application_default_credentials.json
+    # THE FIX: Explicitly set the DNS server to resolve timeout issues.
+    dns:
+      - 8.8.8.8
     depends_on:
       db:
         condition: service_healthy
@@ -49,9 +55,16 @@ services:
     command: celery -A worker.celery_app worker --loglevel=info -P gevent --concurrency=1
     volumes:
       - ./backend:/home/app/web
+      - ~/.config/gcloud:/home/app/.config/gcloud:ro
     user: "${UID}:${GID}"
     env_file:
       - .env
+    environment:
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/home/app/.config/gcloud/application_default_credentials.json
+    # THE FIX: Explicitly set the DNS server to resolve timeout issues.
+    dns:
+      - 8.8.8.8
     depends_on:
       db:
         condition: service_healthy

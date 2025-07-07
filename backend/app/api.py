@@ -5,7 +5,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 from celery_app import celery_app
 from .extensions import db, socketio, redis_client
-from .models import AppIdea
+from .models import AppIdea, IdeaStatus
 
 api_bp = Blueprint('api', __name__)
 
@@ -81,4 +81,55 @@ def get_dependency_status() -> Response:
         "database_status": db_status,
         "redis_status": redis_status,
         "api_status": "online"
+    })
+
+@api_bp.route('/ideas/<int:idea_id>/approve', methods=['POST'])
+def approve_idea(idea_id: int) -> Response | tuple[Response, int]:
+    """Approves an idea, saves feedback, and triggers the development kickoff."""
+    db_session: Session = db.session
+    idea = db_session.get(AppIdea, idea_id)
+    if not idea:
+        return jsonify({"error": "Idea not found"}), 404
+
+    data = request.get_json() or {}
+    feedback = data.get('ceo_feedback', '')
+
+    idea.status = IdeaStatus.APPROVED_FOR_DEV
+    idea.ceo_feedback = feedback
+    db_session.commit()
+
+    log_msg = f'[CEO] Idea {idea.id} approved for development. Kicking off CTO task.'
+    socketio.emit('log_message', {'data': log_msg})
+    socketio.emit('idea_update', {'idea': idea.to_dict()})
+
+    # Dispatch the placeholder task for the CTO agent
+    celery_app.send_task('tasks.cto_development_kickoff', args=[idea.id], countdown=5)  # Add a delay
+
+    return jsonify({
+        "message": f"Idea {idea_id} approved and sent for development.",
+        "idea": idea.to_dict()
+    })
+
+@api_bp.route('/ideas/<int:idea_id>/reject', methods=['POST'])
+def reject_idea(idea_id: int) -> Response | tuple[Response, int]:
+    """Rejects an idea and saves the feedback."""
+    db_session: Session = db.session
+    idea = db_session.get(AppIdea, idea_id)
+    if not idea:
+        return jsonify({"error": "Idea not found"}), 404
+
+    data = request.get_json() or {}
+    feedback = data.get('ceo_feedback', '')
+
+    idea.status = IdeaStatus.REJECTED_BY_CEO
+    idea.ceo_feedback = feedback
+    db_session.commit()
+
+    log_msg = f'[CEO] Idea {idea.id} rejected. Feedback: "{feedback}"'
+    socketio.emit('log_message', {'data': log_msg})
+    socketio.emit('idea_update', {'idea': idea.to_dict()})
+
+    return jsonify({
+        "message": f"Idea {idea_id} has been rejected.",
+        "idea": idea.to_dict()
     })

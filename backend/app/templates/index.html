@@ -36,8 +36,59 @@
         <div class="main-content">
             <div class="idea-column">
                 <h2>Idea Review Queue</h2>
+                <!-- This div will be populated by main.js. The card below is a template. -->
                 <div id="idea-queue">
-                    <p id="loading-message">Loading ideas...</p>
+                    <!--
+                        This is a structural template for a single idea card.
+                        The main.js script will use this structure to generate cards dynamically.
+                    -->
+                    <div class="idea-card" id="idea-template-placeholder">
+                        <h3>AI-Generated Title Will Appear Here</h3>
+                        <div class="idea-status">Status: <span>PENDING_CEO_APPROVAL</span></div>
+
+                        <p class="source-info"><strong>Source:</strong> <a href="#" target="_blank"
+                                rel="noopener noreferrer">Source Name</a></p>
+
+                        <h4>AI-Generated Summary</h4>
+                        <div class="description-box">
+                            The AI-generated summary of the core problem and solution will be displayed in this section.
+                        </div>
+
+                        <h4>Competition Analysis</h4>
+                        <div class="analysis-box">
+                            The CPO's analysis of the competitive landscape will be displayed here.
+                        </div>
+
+                        <h4>SWOT Analysis</h4>
+                        <div class="swot-grid">
+                            <div class="swot-item strengths">
+                                <h5>Strengths</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item weaknesses">
+                                <h5>Weaknesses</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item opportunities">
+                                <h5>Opportunities</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item threats">
+                                <h5>Threats</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                        </div>
+
+                        <div class="ceo-action-panel">
+                            <h4>CEO Review & Action</h4>
+                            <textarea class="feedback-textarea"
+                                placeholder="Provide feedback for rejection or revision..."></textarea>
+                            <div class="action-buttons">
+                                <button class="btn reject-btn">Reject</button>
+                                <button class="btn approve-btn">Approve for Dev</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="log-column">

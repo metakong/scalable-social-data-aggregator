@@ -6,7 +6,7 @@ set -e
 # conditions and guarantees the database schema is correct.
 
 DB_HOST="db"
-DB_USER="$POSTGRES_USER"
+DB_USER="${POSTGRES_USER}"
 DB_NAME="$POSTGRES_DB"
 
 # 1. Wait for the database to be fully available.

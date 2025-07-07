@@ -1,9 +1,11 @@
 from __future__ import annotations
-import os
 import json
+import time
 import httpx
+import logging
 from celery_app import celery_app
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Error
+from flask import current_app
 from .extensions import socketio, redis_client
 
 API_URL = "http://web:8000/api/v1/ideas"
@@ -12,6 +14,8 @@ TARGET_URL = "https://www.mumsnet.com/talk/am_i_being_unreasonable"
 STATE_FILE = "/tmp/mumsnet_state.json"
 PROGRESS_CURRENT_KEY = "discovery_progress_current"
 PROGRESS_TOTAL_KEY = "discovery_progress_total"
+
+logger = logging.getLogger(__name__)
 
 def get_playwright_context() -> tuple[BrowserContext, callable] | tuple[None, None]:
     try:
@@ -24,22 +28,22 @@ def get_playwright_context() -> tuple[BrowserContext, callable] | tuple[None, No
             pw.stop()
         return context, cleanup
     except Error as e:
-        socketio.emit('log_message', {'data': f'[Playwright ERROR] Failed to initialize: {e}'})
+        logger.error(f"[Playwright ERROR] Failed to initialize: {e}")
         return None, None
 
 def ensure_login(page: Page, context: BrowserContext) -> bool:
-    username = os.environ.get("MUMSNET_USERNAME")
-    password = os.environ.get("MUMSNET_PASSWORD")
+    username = current_app.config.get("MUMSNET_USERNAME")
+    password = current_app.config.get("MUMSNET_PASSWORD")
     if not username or not password:
-        socketio.emit('log_message', {'data': '[Mumsnet ERROR] Credentials not configured in .env file.'})
-        return False
+        socketio.emit('log_message', {'data': '[Mumsnet ERROR] Credentials not found in application configuration.'})
+        raise ValueError("Mumsnet credentials not found.")
     try:
         with open(STATE_FILE, 'r') as f:
             storage_state = json.load(f)
         context.add_cookies(storage_state['cookies'])
         page.goto(TARGET_URL, timeout=30000) # Quick check to see if cookies are valid
         if "Log in" in page.content():
-             raise FileNotFoundError("Session expired")
+            raise FileNotFoundError("Session expired")
         socketio.emit('log_message', {'data': '[Mumsnet] Saved session state loaded.'})
         return True
     except (FileNotFoundError, Error):
@@ -52,12 +56,12 @@ def ensure_login(page: Page, context: BrowserContext) -> bool:
         storage = {"cookies": context.cookies()}
         with open(STATE_FILE, 'w') as f:
             json.dump(storage, f)
-        socketio.emit('log_message', {'data': '[Mumsnet] Login successful and session saved.'})
+        logger.info('[Mumsnet] Login successful and session saved.')
         return True
 
 @celery_app.task(name="sourcing.mumsnet")
 def scrape_mumsnet() -> str:
-    socketio.emit('log_message', {'data': '[Mumsnet] Sourcing task started.'})
+    logger.info('[Mumsnet] Sourcing task started.')
     context, cleanup = get_playwright_context()
     if not context:
         return "Mumsnet sourcing failed: Could not start Playwright."
@@ -93,10 +97,11 @@ def scrape_mumsnet() -> str:
                     )
                     if response.status_code == 201:
                         ideas_found += 1
+                    time.sleep(2)  # Polite delay
             except Exception as e:
                 socketio.emit('log_message', {'data': f'[Mumsnet ERROR] Could not process thread: {e}'})
         
-        socketio.emit('log_message', {'data': f'[Mumsnet] Sourcing finished. Queued {ideas_found} ideas.'})
+        logger.info(f'[Mumsnet] Sourcing finished. Queued {ideas_found} ideas.')
         return f"Completed Mumsnet sourcing. Submitted {ideas_found} new ideas."
     except Exception as e:
         error_message = f'[Mumsnet FATAL] Sourcing failed: {e}'

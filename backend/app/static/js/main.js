@@ -16,6 +16,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
 
+    // Clear the placeholder template from the HTML
+    const placeholder = document.getElementById('idea-template-placeholder');
+    if (placeholder) {
+        placeholder.remove();
+    }
+
     function addLogMessage(message) {
         const logEntry = document.createElement('div');
         const timestamp = new Date().toLocaleTimeString();
@@ -55,15 +61,59 @@ document.addEventListener('DOMContentLoaded', () => {
         const card = document.createElement('div');
         card.className = 'idea-card';
         card.id = `idea-${idea.id}`;
-        const title = idea.ai_title || 'Analysis In Progress...';
-        const description = idea.ai_summary || 'AI-generated summary will appear here.';
+        card.dataset.status = idea.status;
+
+        const createSwotList = (items) => {
+            if (!items || !Array.isArray(items)) return '<li>No data.</li>';
+            return items.map(item => `<li>${item}</li>`).join('');
+        };
+
+        const swot = idea.swot_analysis || {};
 
         card.innerHTML = `
-            <h3>${title}</h3>
-            <p><strong>AI-Generated Summary:</strong></p>
-            <div class="description-box">${description.replace(/\n/g, '<br>')}</div>
+            <h3>${idea.ai_title || 'Analysis In Progress...'}</h3>
+            <div class="idea-status">Status: <span>${idea.status}</span></div>
             <p class="source-info"><strong>Source:</strong> <a href="${idea.source_url}" target="_blank" rel="noopener noreferrer">${idea.source_name}</a></p>
-            <div class="idea-status">Status: <span>${idea.status}</span></div>`;
+
+            <h4>AI-Generated Summary</h4>
+            <div class="description-box">
+                ${idea.ai_summary ? idea.ai_summary.replace(/\n/g, '<br>') : 'AI-generated summary will appear here.'}
+            </div>
+
+            <h4>Competition Analysis</h4>
+            <div class="analysis-box">
+                ${idea.competition_analysis || 'Competition analysis will appear here.'}
+            </div>
+
+            <h4>SWOT Analysis</h4>
+            <div class="swot-grid">
+                <div class="swot-item strengths">
+                    <h5>Strengths</h5>
+                    <ul class="swot-list">${createSwotList(swot.strengths)}</ul>
+                </div>
+                <div class="swot-item weaknesses">
+                    <h5>Weaknesses</h5>
+                    <ul class="swot-list">${createSwotList(swot.weaknesses)}</ul>
+                </div>
+                <div class="swot-item opportunities">
+                    <h5>Opportunities</h5>
+                    <ul class="swot-list">${createSwotList(swot.opportunities)}</ul>
+                </div>
+                <div class="swot-item threats">
+                    <h5>Threats</h5>
+                    <ul class="swot-list">${createSwotList(swot.threats)}</ul>
+                </div>
+            </div>
+
+            <div class="ceo-action-panel">
+                <h4>CEO Review & Action</h4>
+                <textarea class="feedback-textarea" placeholder="Provide feedback for rejection or revision...">${idea.ceo_feedback || ''}</textarea>
+                <div class="action-buttons">
+                    <button class="btn reject-btn" data-id="${idea.id}">Reject</button>
+                    <button class="btn approve-btn" data-id="${idea.id}">Approve for Dev</button>
+                </div>
+            </div>
+        `;
         return card;
     }
 
@@ -103,24 +153,70 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- CEO Actions using Event Delegation ---
+    ideaQueue.addEventListener('click', async (event) => {
+        const target = event.target;
+        const isApprove = target.classList.contains('approve-btn');
+        const isReject = target.classList.contains('reject-btn');
+
+        if (!isApprove && !isReject) return;
+
+        const ideaId = target.dataset.id;
+        const card = target.closest('.idea-card');
+        const feedbackTextarea = card.querySelector('.feedback-textarea');
+        const feedback = feedbackTextarea.value.trim();
+
+        const endpoint = isApprove ? `/api/v1/ideas/${ideaId}/approve` : `/api/v1/ideas/${ideaId}/reject`;
+        const action = isApprove ? 'Approving' : 'Rejecting';
+
+        card.querySelectorAll('.btn').forEach(button => button.disabled = true);
+        addLogMessage(`${action} idea ${ideaId}...`);
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ceo_feedback: feedback }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Server responded with status: ${response.status}`);
+            }
+            const result = await response.json();
+            addLogMessage(result.message);
+            // The socket 'idea_update' event will handle re-rendering the card with the new status.
+        } catch (error) {
+            addLogMessage(`Error ${action.toLowerCase()} idea ${ideaId}: ${error.message}`);
+            card.querySelectorAll('.btn').forEach(button => button.disabled = false);
+        }
+    });
+
+    // --- Socket.IO Event Handling ---
     const socket = io({ transports: ['websocket'] });
     socket.on('connect', () => addLogMessage('Real-time connection established.'));
     socket.on('disconnect', () => addLogMessage('Real-time connection lost.'));
     socket.on('log_message', (msg) => addLogMessage(msg.data));
-    socket.on('new_idea', (data) => {
-        const loadingMessage = document.getElementById('loading-message') || document.getElementById('no-ideas');
+
+    socket.on('idea_update', (data) => {
+        addLogMessage(`Received update for Idea ${data.idea.id}. Status: ${data.idea.status}`);
+        const idea = data.idea;
+        const existingCard = document.getElementById(`idea-${idea.id}`);
+        const newCard = createIdeaCard(idea);
+
+        const loadingMessage = document.getElementById('loading-message');
         if (loadingMessage) loadingMessage.remove();
 
-        const existingCard = document.getElementById(`idea-${data.idea.id}`);
         if (existingCard) {
-            existingCard.replaceWith(createIdeaCard(data.idea));
+            existingCard.replaceWith(newCard);
         } else {
-            ideaQueue.prepend(createIdeaCard(data.idea));
+            ideaQueue.prepend(newCard);
         }
     });
+
     socket.on('progress_update', (data) => {
         const current = data.current || 0;
-        const total = data.total || 1; // Avoid division by zero
+        const total = data.total || 1;
         const percentage = Math.min(100, Math.round((current / total) * 100));
         progressBar.style.width = `${percentage}%`;
         progressText.textContent = `Processing... ${current} of ${total} (${percentage}%)`;
@@ -136,6 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     startCycleBtn.addEventListener('click', startDiscoveryCycle);
 
+    // --- Initial Load ---
     checkSystemStatus();
     setInterval(checkSystemStatus, 30000);
     fetchAndDisplayIdeas();

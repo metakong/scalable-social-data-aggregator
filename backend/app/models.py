@@ -18,6 +18,7 @@ class IdeaStatus(enum.Enum):
     PUBLISHED = "PUBLISHED"
 
 class AppIdea(db.Model):
+
     """
     Represents a single application idea as it moves through the automated
     discovery, vetting, analysis, development, and publishing pipeline.

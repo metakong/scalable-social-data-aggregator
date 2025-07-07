@@ -67,7 +67,7 @@ def run_migrations_offline():
     context.configure(
         url=url, target_metadata=get_metadata(), literal_binds=True
     )
-
+    logger.info("Running migrations in offline mode")
     with context.begin_transaction():
         context.run_migrations()
 
@@ -102,7 +102,7 @@ def run_migrations_online():
             target_metadata=get_metadata(),
             **conf_args
         )
-
+        logger.info("Running migrations in online mode")
         with context.begin_transaction():
             context.run_migrations()
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
-import os
 import requests
+import time
 import praw
+import logging
+from flask import current_app
 from celery_app import celery_app
 from .extensions import socketio, redis_client
 
@@ -12,16 +14,20 @@ USER_AGENT = "script:VVS-Discovery-Agent:v1.2 (by /u/EmotionalGap3249)"
 PROGRESS_CURRENT_KEY = "discovery_progress_current"
 PROGRESS_TOTAL_KEY = "discovery_progress_total"
 
+logger = logging.getLogger(__name__)
+
 def get_reddit_instance() -> praw.Reddit | None:
-    if not all(k in os.environ for k in ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"]):
-        socketio.emit('log_message', {'data': '[Reddit ERROR] Reddit credentials not fully configured in .env file.'})
+    required_keys = ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"]
+    if not all(current_app.config.get(k) for k in required_keys):
+        error_msg = "[Reddit ERROR] Reddit credentials not fully configured in application configuration."
+        logger.error(error_msg)
         return None
     return praw.Reddit(
-        client_id=os.environ["REDDIT_CLIENT_ID"],
-        client_secret=os.environ["REDDIT_CLIENT_SECRET"],
+        client_id=current_app.config.get("REDDIT_CLIENT_ID"),
+        client_secret=current_app.config.get("REDDIT_CLIENT_SECRET"),
         user_agent=USER_AGENT,
-        username=os.environ["REDDIT_USERNAME"],
-        password=os.environ["REDDIT_PASSWORD"],
+        username=current_app.config.get("REDDIT_USERNAME"),
+        password=current_app.config.get("REDDIT_PASSWORD"),
         requestor_kwargs={"timeout": 60}
     )
 
@@ -32,7 +38,7 @@ def scrape_reddit_task() -> str:
         return "Reddit scraping failed due to configuration."
 
     ideas_found = 0
-    socketio.emit('log_message', {'data': '[Reddit] Sourcing task started.'})
+    logger.info("[Reddit] Sourcing task started.")
     
     total_posts_to_scan = len(SUBREDDITS) * 10
     redis_client.incrby(PROGRESS_TOTAL_KEY, total_posts_to_scan)
@@ -58,8 +64,12 @@ def scrape_reddit_task() -> str:
                     )
                     if post_response.status_code == 201:
                         ideas_found += 1
-            except Exception as e:
-                socketio.emit('log_message', {'data': f"[Reddit ERROR] Failed to scrape r/{subreddit_name}: {e}"})
+                    time.sleep(2) # Polite delay
+            except praw.exceptions.APIException as e:
+                logger.error(f"[Reddit API ERROR] Failed to scrape r/{subreddit_name} due to Reddit API: {e}")
+                continue
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[Reddit HTTP ERROR] Failed to scrape r/{subreddit_name} due to network issue: {e}")
 
-    socketio.emit('log_message', {'data': f'[Reddit] Sourcing finished. Queued {ideas_found} ideas.'})
+    logger.info(f"[Reddit] Sourcing finished. Queued {ideas_found} ideas.")
     return f"Completed Reddit sourcing. Submitted {ideas_found} new ideas."

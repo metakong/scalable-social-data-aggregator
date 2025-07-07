@@ -16,9 +16,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     netcat-openbsd \
     postgresql-client \
+    dnsutils \
+    curl \
     && rm -rf /var/lib/apt/lists/*
-
-RUN python -m venv ${VENV_PATH}
+RUN apt-get update && apt-get install -y openjdk-17-jdk unzip
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+RUN apt-get update && apt-get install -y --no-install-recommends unzip
+# Install Android SDK and necessary build tools
+RUN curl -o android-sdk.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+    && mkdir -p /opt/android-sdk \
+    && unzip android-sdk.zip -d /opt/android-sdk \
+    && mv /opt/android-sdk/cmdline-tools /opt/cmdline-tools \
+    && rm android-sdk.zip \
+    && export PATH="$PATH:/opt/cmdline-tools/bin" \
+    && yes | /opt/cmdline-tools/bin/sdkmanager --licenses && /opt/cmdline-tools/bin/sdkmanager --install "build-tools;34.0.0" "platforms;android-34"
+RUN echo "PATH: $PATH" && echo "ANDROID_HOME: $ANDROID_HOME"
 RUN pip install --no-cache-dir --upgrade pip
 
 COPY requirements.txt .
