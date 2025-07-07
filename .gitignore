@@ -27,3 +27,4 @@ docker-compose.local.yml
 
 # OS-specific files
 .DS_Store
+.terraform/
