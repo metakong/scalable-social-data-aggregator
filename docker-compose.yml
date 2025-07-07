@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: entrypoint.sh gunicorn --bind 0.0.0.0:8000 --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker "wsgi:app"
+    command: gunicorn --bind 0.0.0.0:8000 --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker "wsgi:app"
     volumes:
       - ./backend:/home/app/web
       - ~/.config/gcloud:/home/app/.config/gcloud:ro

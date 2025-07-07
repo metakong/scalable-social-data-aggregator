@@ -1,7 +1,6 @@
 from __future__ import annotations
 import logging
-from flask import Flask, Config
-from config import Config
+from flask import Flask
 from .extensions import db, migrate, socketio
 
 def create_app(config_class: type[Config] = Config) -> Flask:

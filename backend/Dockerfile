@@ -37,7 +37,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # This command will now correctly install browsers in a system-wide location.
-RUN python -m playwright install --with-deps chromium
 
 RUN addgroup --system app && adduser --system --ingroup app app
 WORKDIR /home/app/web

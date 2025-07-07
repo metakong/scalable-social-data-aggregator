@@ -1,37 +1,28 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const statusApiUrl = '/api/v1/status';
-    const ideasApiUrl = '/api/v1/ideas';
-    const sourcingApiUrl = '/api/v1/sourcing/start';
-
-    const apiStatusText = document.getElementById('api-status').querySelector('.status-text');
-    const apiStatusLight = document.getElementById('api-status').querySelector('.status-light');
-    const dbStatusText = document.getElementById('db-status').querySelector('.status-text');
-    const dbStatusLight = document.getElementById('db-status').querySelector('.status-light');
-    const redisStatusText = document.getElementById('redis-status').querySelector('.status-text');
-    const redisStatusLight = document.getElementById('redis-status').querySelector('.status-light');
-
+    // --- Constants and DOM Elements ---
+    const API_BASE_URL = '/api/v1';
     const ideaQueue = document.getElementById('idea-queue');
     const startCycleBtn = document.getElementById('start-cycle-btn');
     const logViewer = document.getElementById('log-viewer');
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
 
-    // Clear the placeholder template from the HTML
-    const placeholder = document.getElementById('idea-template-placeholder');
-    if (placeholder) {
-        placeholder.remove();
-    }
-
-    function addLogMessage(message) {
+    // --- Utility Functions ---
+    function addLogMessage(message, type = 'info') {
         const logEntry = document.createElement('div');
         const timestamp = new Date().toLocaleTimeString();
+        logEntry.className = `log-${type}`;
         logEntry.textContent = `[${timestamp}] ${message}`;
         logViewer.appendChild(logEntry);
         logViewer.scrollTop = logViewer.scrollHeight;
     }
 
-    function updateStatus(light, text, status) {
-        light.className = 'status-light';
+    function updateStatusLight(elementId, status) {
+        const light = document.getElementById(elementId)?.querySelector('.status-light');
+        const text = document.getElementById(elementId)?.querySelector('.status-text');
+        if (!light || !text) return;
+
+        light.className = 'status-light'; // Reset classes
         if (status === 'ok' || status === 'online') {
             light.classList.add('green');
             text.textContent = 'Online';
@@ -41,22 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function checkSystemStatus() {
-        try {
-            const response = await fetch(statusApiUrl);
-            if (!response.ok) throw new Error('Network response was not ok');
-            const data = await response.json();
-            updateStatus(apiStatusLight, apiStatusText, data.api_status);
-            updateStatus(dbStatusLight, dbStatusText, data.database_status);
-            updateStatus(redisStatusLight, redisStatusText, data.redis_status);
-        } catch (error) {
-            addLogMessage(`Error fetching system status: ${error.message}`);
-            updateStatus(apiStatusLight, apiStatusText, 'error');
-            updateStatus(dbStatusLight, dbStatusText, 'error');
-            updateStatus(redisStatusLight, redisStatusText, 'error');
-        }
-    }
-
+    // --- Core UI Function ---
     function createIdeaCard(idea) {
         const card = document.createElement('div');
         card.className = 'idea-card';
@@ -64,7 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
         card.dataset.status = idea.status;
 
         const createSwotList = (items) => {
-            if (!items || !Array.isArray(items)) return '<li>No data.</li>';
+            if (!items || !Array.isArray(items) || items.length === 0) {
+                return '<li>No data provided.</li>';
+            }
             return items.map(item => `<li>${item}</li>`).join('');
         };
 
@@ -117,19 +95,41 @@ document.addEventListener('DOMContentLoaded', () => {
         return card;
     }
 
+    // --- API Call Functions ---
+    async function checkSystemStatus() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/status`);
+            if (!response.ok) throw new Error('Network response was not ok');
+            const data = await response.json();
+            updateStatusLight('api-status', data.api_status);
+            updateStatusLight('db-status', data.database_status);
+            updateStatusLight('redis-status', data.redis_status);
+        } catch (error) {
+            addLogMessage(`Error fetching system status: ${error.message}`, 'error');
+            updateStatusLight('api-status', 'error');
+            updateStatusLight('db-status', 'error');
+            updateStatusLight('redis-status', 'error');
+        }
+    }
+
     async function fetchAndDisplayIdeas() {
         try {
-            const response = await fetch(ideasApiUrl);
+            const response = await fetch(`${API_BASE_URL}/ideas`);
             if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
             const ideas = await response.json();
-            ideaQueue.innerHTML = '';
-            if (ideas.length === 0) {
+
+            ideaQueue.innerHTML = ''; // Clear existing ideas
+
+            // Filter for only ideas awaiting CEO review
+            const ideasForReview = ideas.filter(idea => idea.status === 'PENDING_CEO_APPROVAL');
+
+            if (ideasForReview.length === 0) {
                 ideaQueue.innerHTML = '<p id="loading-message">The review queue is empty. Run a discovery cycle to find new ideas.</p>';
             } else {
-                ideas.forEach(idea => ideaQueue.appendChild(createIdeaCard(idea)));
+                ideasForReview.forEach(idea => ideaQueue.appendChild(createIdeaCard(idea)));
             }
         } catch (error) {
-            addLogMessage(`Error fetching ideas: ${error.message}`);
+            addLogMessage(`Error fetching ideas: ${error.message}`, 'error');
             ideaQueue.innerHTML = '<p id="loading-message" style="color: var(--status-error);">Error loading ideas.</p>';
         }
     }
@@ -142,35 +142,25 @@ document.addEventListener('DOMContentLoaded', () => {
         progressBar.style.width = '0%';
         progressText.textContent = 'Initializing...';
         try {
-            const response = await fetch(sourcingApiUrl, { method: 'POST' });
+            const response = await fetch(`${API_BASE_URL}/sourcing/start`, { method: 'POST' });
             if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
             const data = await response.json();
             addLogMessage(`Cycle initiated successfully: ${data.message}`);
         } catch (error) {
-            addLogMessage(`Error starting cycle: ${error.message}`);
+            addLogMessage(`Error starting cycle: ${error.message}`, 'error');
             startCycleBtn.disabled = false;
             startCycleBtn.classList.remove('loading');
         }
     }
 
-    // --- CEO Actions using Event Delegation ---
-    ideaQueue.addEventListener('click', async (event) => {
-        const target = event.target;
-        const isApprove = target.classList.contains('approve-btn');
-        const isReject = target.classList.contains('reject-btn');
-
-        if (!isApprove && !isReject) return;
-
-        const ideaId = target.dataset.id;
-        const card = target.closest('.idea-card');
+    async function handleCeoAction(action, ideaId, card) {
         const feedbackTextarea = card.querySelector('.feedback-textarea');
         const feedback = feedbackTextarea.value.trim();
-
-        const endpoint = isApprove ? `/api/v1/ideas/${ideaId}/approve` : `/api/v1/ideas/${ideaId}/reject`;
-        const action = isApprove ? 'Approving' : 'Rejecting';
+        const endpoint = `${API_BASE_URL}/ideas/${ideaId}/${action}`;
 
         card.querySelectorAll('.btn').forEach(button => button.disabled = true);
-        addLogMessage(`${action} idea ${ideaId}...`);
+        card.style.opacity = '0.5';
+        addLogMessage(`Requesting to ${action} idea ${ideaId}...`);
 
         try {
             const response = await fetch(endpoint, {
@@ -178,39 +168,58 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ceo_feedback: feedback }),
             });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `Server responded with status: ${response.status}`);
-            }
             const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || `Server responded with status: ${response.status}`);
+            }
             addLogMessage(result.message);
-            // The socket 'idea_update' event will handle re-rendering the card with the new status.
+            // UI update will be handled by the 'idea_update' socket event
         } catch (error) {
-            addLogMessage(`Error ${action.toLowerCase()} idea ${ideaId}: ${error.message}`);
+            addLogMessage(`Error ${action}ing idea ${ideaId}: ${error.message}`, 'error');
             card.querySelectorAll('.btn').forEach(button => button.disabled = false);
+            card.style.opacity = '1';
+        }
+    }
+
+    // --- Event Listeners ---
+    startCycleBtn.addEventListener('click', startDiscoveryCycle);
+
+    ideaQueue.addEventListener('click', (event) => {
+        const button = event.target.closest('.btn');
+        if (!button) return;
+
+        const ideaId = button.dataset.id;
+        const card = document.getElementById(`idea-${ideaId}`);
+
+        if (button.classList.contains('approve-btn')) {
+            handleCeoAction('approve', ideaId, card);
+        } else if (button.classList.contains('reject-btn')) {
+            handleCeoAction('reject', ideaId, card);
         }
     });
 
-    // --- Socket.IO Event Handling ---
+    // --- Socket.IO Setup ---
     const socket = io({ transports: ['websocket'] });
+
     socket.on('connect', () => addLogMessage('Real-time connection established.'));
-    socket.on('disconnect', () => addLogMessage('Real-time connection lost.'));
+    socket.on('disconnect', () => addLogMessage('Real-time connection lost.', 'error'));
     socket.on('log_message', (msg) => addLogMessage(msg.data));
 
     socket.on('idea_update', (data) => {
-        addLogMessage(`Received update for Idea ${data.idea.id}. Status: ${data.idea.status}`);
         const idea = data.idea;
+        addLogMessage(`Received update for Idea ${idea.id}. Status: ${idea.status}`);
         const existingCard = document.getElementById(`idea-${idea.id}`);
-        const newCard = createIdeaCard(idea);
 
-        const loadingMessage = document.getElementById('loading-message');
-        if (loadingMessage) loadingMessage.remove();
-
-        if (existingCard) {
-            existingCard.replaceWith(newCard);
-        } else {
-            ideaQueue.prepend(newCard);
+        // If the idea is no longer for CEO approval, remove it. Otherwise, update it.
+        if (idea.status !== 'PENDING_CEO_APPROVAL' && existingCard) {
+            existingCard.remove();
+        } else if (existingCard) {
+            existingCard.replaceWith(createIdeaCard(idea));
+        } else if (idea.status === 'PENDING_CEO_APPROVAL') {
+            // This handles the case where a new idea reaches the approval state
+            const loadingMessage = document.getElementById('loading-message');
+            if (loadingMessage) loadingMessage.remove();
+            ideaQueue.prepend(createIdeaCard(idea));
         }
     });
 
@@ -230,10 +239,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    startCycleBtn.addEventListener('click', startDiscoveryCycle);
-
     // --- Initial Load ---
-    checkSystemStatus();
-    setInterval(checkSystemStatus, 30000);
-    fetchAndDisplayIdeas();
+    function initialize() {
+        const placeholder = document.getElementById('idea-template-placeholder');
+        if (placeholder) placeholder.remove();
+
+        checkSystemStatus();
+        setInterval(checkSystemStatus, 30000);
+        fetchAndDisplayIdeas();
+    }
+
+    initialize();
 });

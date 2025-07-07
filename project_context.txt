@@ -1,0 +1,3711 @@
+Project Context for Veiled Vector Space
+Generated on: 2025-07-07T15:02:30.808804
+================================================================================
+
+--- File: .env.example ---
+
+# PostgreSQL Credentials
+POSTGRES_USER=app_factory_admin
+POSTGRES_PASSWORD=
+POSTGRES_DB=app_factory_db
+
+# Flask Application Secret Key
+SECRET_KEY=
+
+# Celery Configuration
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND_URL=redis://redis:6379/0
+
+# Host User IDs for Docker Permissions
+UID=1000
+GID=1000
+
+# Credentials for Target Scraping Sites
+MUMSNET_USERNAME=
+MUMSNET_PASSWORD=
+
+# Google AI API Key (for analysis tasks)
+GOOGLE_API_KEY=
+
+================================================================================
+
+--- File: Makefile ---
+
+.PHONY: init-env
+
+init-env:
+	@if [ ! -f .env ]; then \
+		echo "Creating .env file from .env.example..."; \
+		cp .env.example .env; \
+	fi
+	@echo "Checking for missing secrets in .env..."
+	@if ! grep -q "SECRET_KEY=.\+" .env; then \
+		SECRET_KEY_VALUE=$$(openssl rand -hex 32); \
+		sed -i'' -e "s/^SECRET_KEY=.*/SECRET_KEY=$$SECRET_KEY_VALUE/" .env; \
+		echo "SECRET_KEY populated."; \
+	fi
+	@if ! grep -q "POSTGRES_PASSWORD=.\+" .env; then \
+		POSTGRES_PASSWORD_VALUE=$$(openssl rand -hex 16); \
+		sed -i'' -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$POSTGRES_PASSWORD_VALUE/" .env; \
+		echo "POSTGRES_PASSWORD populated."; \
+	fi
+
+================================================================================
+
+--- File: README.md ---
+
+# Veiled Vector Space - Latent Demand Discovery Engine
+
+This project is the foundational data sourcing and analysis engine for the Veiled Vector Space App Factory. It is designed to identify latent consumer demand by scraping and analyzing discussions on non-technical online communities.
+
+## System Setup
+
+### 1. Environment Configuration
+
+The system is configured using environment variables.
+
+1.  **Create the `.env` file:**
+    ```bash
+    cp .env.example .env
+    ```
+2.  **Populate the `.env` file:** Manually edit the `.env` file and fill in values for `POSTGRES_PASSWORD`, `SECRET_KEY`, `MUMSNET_USERNAME`, `MUMSNET_PASSWORD`, and `GOOGLE_API_KEY`.
+
+### 2. Deployment Procedure
+
+This is the definitive, correct sequence of commands.
+
+1.  **Full System Reset (Ensures a clean state):**
+    ```bash
+    docker compose down -v
+    ```
+2.  **Build Fresh Docker Images:**
+    ```bash
+    docker compose build
+    ```
+3.  **Start All Services (Waits for healthchecks):**
+    ```bash
+    docker compose up -d
+    ```
+4.  **Run Database Migrations (On the running container):**
+    ```bash
+    docker compose exec web flask db migrate -m "Finalized application architecture"
+    docker compose exec web flask db upgrade
+    ```
+
+### 3. Accessing the Application
+
+* **Dashboard**: `http://localhost:8000`
+
+================================================================================
+
+--- File: docker-compose.yml ---
+
+services:
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: gunicorn --bind 0.0.0.0:8000 --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker "wsgi:app"
+    volumes:
+      - ./backend:/home/app/web
+      - ~/.config/gcloud:/home/app/.config/gcloud:ro
+    ports:
+      - "8000:8000"
+    user: "${UID}:${GID}"
+    env_file:
+      - .env
+    environment:
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/home/app/.config/gcloud/application_default_credentials.json
+    # THE FIX: Explicitly set the DNS server to resolve timeout issues.
+    dns:
+      - 8.8.8.8
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A worker.celery_app worker --loglevel=info -P gevent --concurrency=1
+    volumes:
+      - ./backend:/home/app/web
+      - ~/.config/gcloud:/home/app/.config/gcloud:ro
+    user: "${UID}:${GID}"
+    env_file:
+      - .env
+    environment:
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/home/app/.config/gcloud/application_default_credentials.json
+    # THE FIX: Explicitly set the DNS server to resolve timeout issues.
+    dns:
+      - 8.8.8.8
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+
+
+================================================================================
+
+--- File: entrypoint.sh ---
+
+#!/bin/sh
+set -e
+
+# This entrypoint script ensures the database is ready and migrations are
+# applied before the main web application starts. This prevents race
+# conditions and guarantees the database schema is correct.
+
+DB_HOST="db"
+DB_USER="${POSTGRES_USER}"
+DB_NAME="$POSTGRES_DB"
+
+# 1. Wait for the database to be fully available.
+echo "Waiting for PostgreSQL database to be ready at ${DB_HOST}:5432..."
+until pg_isready -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -q; do
+  >&2 echo "Postgres is unavailable - sleeping"
+  sleep 2
+done
+>&2 echo "PostgreSQL is ready."
+
+# 2. Run database migrations.
+echo "Running database migrations..."
+flask db upgrade
+>&2 echo "Database migrations complete."
+
+# 3. Execute the main command (e.g., start Gunicorn).
+echo "Executing main command: $@"
+exec "$@"
+
+================================================================================
+
+--- File: main.tf ---
+
+# --- Terraform and Provider Configuration ---
+terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
+provider "google" {
+  project = var.gcp_project_id
+  region  = var.gcp_region
+}
+
+# --- Variable Definitions ---
+variable "gcp_project_id" {
+  description = "The Google Cloud project ID to deploy resources into."
+  type        = string
+}
+
+variable "gcp_region" {
+  description = "The Google Cloud region for resource deployment."
+  type        = string
+  default     = "us-central1"
+}
+
+# --- Service Account Creation ---
+resource "google_service_account" "flask_sa" {
+  account_id   = "flask-sa"
+  display_name = "Flask Application Service Account"
+  description  = "Service account for the main Flask web application."
+}
+
+resource "google_service_account" "celery_sa" {
+  account_id   = "celery-sa"
+  display_name = "Celery Worker Service Account"
+  description  = "Service account for the Celery background task workers."
+}
+
+resource "google_service_account" "github_actions_sa" {
+  account_id   = "github-actions-sa"
+  display_name = "GitHub Actions CI/CD Service Account"
+  description  = "Service account for GitHub Actions to interact with GCP."
+}
+
+# --- Secret Manager Secret Provisioning ---
+locals {
+  secret_ids = [
+    "google-api-key",
+    "mumsnet-username",
+    "mumsnet-password",
+    "reddit-client-id",
+    "reddit-client-secret",
+    "reddit-username",
+    "reddit-password",
+    "flask-secret-key",
+    "postgres-password"
+  ]
+}
+
+resource "google_secret_manager_secret" "app_secrets" {
+  for_each = toset(local.secret_ids)
+
+  secret_id = each.key
+  replication {
+    # This block is now corrected
+    auto {}
+  }
+}
+
+# --- IAM Bindings for Least Privilege Access to Secrets ---
+
+# Grant Flask SA access to its required secrets
+resource "google_secret_manager_secret_iam_member" "flask_sa_access_google_api_key" {
+  project   = google_secret_manager_secret.app_secrets["google-api-key"].project
+  secret_id = google_secret_manager_secret.app_secrets["google-api-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.flask_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "flask_sa_access_flask_secret_key" {
+  project   = google_secret_manager_secret.app_secrets["flask-secret-key"].project
+  secret_id = google_secret_manager_secret.app_secrets["flask-secret-key"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.flask_sa.email}"
+}
+
+# Grant Celery SA access to its required secrets
+locals {
+  celery_accessible_secrets = toset(setsubtract(local.secret_ids, ["flask-secret-key"]))
+}
+
+resource "google_secret_manager_secret_iam_member" "celery_sa_access" {
+  for_each = local.celery_accessible_secrets
+
+  project   = google_secret_manager_secret.app_secrets[each.key].project
+  secret_id = google_secret_manager_secret.app_secrets[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.celery_sa.email}"
+}   
+
+================================================================================
+
+--- File: requirements.txt ---
+
+flask
+gunicorn
+gevent
+flask-socketio
+gevent-websocket
+SQLAlchemy
+Flask-SQLAlchemy
+Flask-Migrate
+psycopg2-binary
+celery
+redis
+requests
+playwright
+sqlalchemy-stubs
+types-redis
+psycogreen
+google-generativeai
+praw==7.7.1
+httpx==0.27.0
+google-cloud-secret-manager==2.20.0
+
+================================================================================
+
+--- File: terraform.tfstate ---
+
+{
+  "version": 4,
+  "terraform_version": "1.12.2",
+  "serial": 26,
+  "lineage": "db3ca3b1-f4a2-0f7b-1b8d-627ae3515e0f",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret",
+      "name": "app_secrets",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "index_key": "flask-secret-key",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.739048Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/flask-secret-key",
+            "labels": {},
+            "name": "projects/796150464436/secrets/flask-secret-key",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "flask-secret-key",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "google-api-key",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.750562Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/google-api-key",
+            "labels": {},
+            "name": "projects/796150464436/secrets/google-api-key",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "google-api-key",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "mumsnet-password",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.730212Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-password",
+            "labels": {},
+            "name": "projects/796150464436/secrets/mumsnet-password",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "mumsnet-password",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "mumsnet-username",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.737885Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-username",
+            "labels": {},
+            "name": "projects/796150464436/secrets/mumsnet-username",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "mumsnet-username",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "postgres-password",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T05:01:54.677008Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/postgres-password",
+            "labels": null,
+            "name": "projects/796150464436/secrets/postgres-password",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "postgres-password",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-client-id",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.752744Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-id",
+            "labels": {},
+            "name": "projects/796150464436/secrets/reddit-client-id",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-client-id",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-client-secret",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.733574Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-secret",
+            "labels": {},
+            "name": "projects/796150464436/secrets/reddit-client-secret",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-client-secret",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-password",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.751447Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-password",
+            "labels": {},
+            "name": "projects/796150464436/secrets/reddit-password",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-password",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-username",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "create_time": "2025-07-07T04:14:55.749537Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-username",
+            "labels": {},
+            "name": "projects/796150464436/secrets/reddit-username",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-username",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": {},
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "celery_sa_access",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "index_key": "google-api-key",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxZe1h4=",
+            "id": "projects/deal-flow-engine/secrets/google-api-key/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/google-api-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "mumsnet-password",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdkEI=",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-password/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/mumsnet-password"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "mumsnet-username",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdK0A=",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-username/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/mumsnet-username"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "postgres-password",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5T74iN+4=",
+            "id": "projects/deal-flow-engine/secrets/postgres-password/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/postgres-password"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-client-id",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdDD4=",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-id/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-client-id"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-client-secret",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdHRo=",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-secret/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-client-secret"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-password",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdMQ0=",
+            "id": "projects/deal-flow-engine/secrets/reddit-password/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-password"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-username",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdpU4=",
+            "id": "projects/deal-flow-engine/secrets/reddit-username/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-username"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "flask_sa_access_flask_secret_key",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYb+oU=",
+            "id": "projects/deal-flow-engine/secrets/flask-secret-key/roles/secretmanager.secretAccessor/serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/flask-secret-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.flask_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "flask_sa_access_google_api_key",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxZe1h4=",
+            "id": "projects/deal-flow-engine/secrets/google-api-key/roles/secretmanager.secretAccessor/serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/google-api-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.flask_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "celery_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "celery-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for the Celery background task workers.",
+            "disabled": false,
+            "display_name": "Celery Worker Service Account",
+            "email": "celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "114296361187637987074"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "flask_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "flask-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for the main Flask web application.",
+            "disabled": false,
+            "display_name": "Flask Application Service Account",
+            "email": "flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "112076784339856219806"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "github_actions_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "github-actions-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for GitHub Actions to interact with GCP.",
+            "disabled": false,
+            "display_name": "GitHub Actions CI/CD Service Account",
+            "email": "github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "115778952158244123657"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
+
+
+================================================================================
+
+--- File: terraform.tfstate.backup ---
+
+{
+  "version": 4,
+  "terraform_version": "1.12.2",
+  "serial": 23,
+  "lineage": "db3ca3b1-f4a2-0f7b-1b8d-627ae3515e0f",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret",
+      "name": "app_secrets",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "index_key": "flask-secret-key",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.739048Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/flask-secret-key",
+            "labels": null,
+            "name": "projects/796150464436/secrets/flask-secret-key",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "flask-secret-key",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "google-api-key",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.750562Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/google-api-key",
+            "labels": null,
+            "name": "projects/796150464436/secrets/google-api-key",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "google-api-key",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "mumsnet-password",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.730212Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-password",
+            "labels": null,
+            "name": "projects/796150464436/secrets/mumsnet-password",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "mumsnet-password",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "mumsnet-username",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.737885Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-username",
+            "labels": null,
+            "name": "projects/796150464436/secrets/mumsnet-username",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "mumsnet-username",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-client-id",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.752744Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-id",
+            "labels": null,
+            "name": "projects/796150464436/secrets/reddit-client-id",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-client-id",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-client-secret",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.733574Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-secret",
+            "labels": null,
+            "name": "projects/796150464436/secrets/reddit-client-secret",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-client-secret",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-password",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.751447Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-password",
+            "labels": null,
+            "name": "projects/796150464436/secrets/reddit-password",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-password",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        },
+        {
+          "index_key": "reddit-username",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": null,
+            "create_time": "2025-07-07T04:14:55.749537Z",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "expire_time": "",
+            "id": "projects/deal-flow-engine/secrets/reddit-username",
+            "labels": null,
+            "name": "projects/796150464436/secrets/reddit-username",
+            "project": "deal-flow-engine",
+            "replication": [
+              {
+                "auto": [
+                  {
+                    "customer_managed_encryption": []
+                  }
+                ],
+                "user_managed": []
+              }
+            ],
+            "rotation": [],
+            "secret_id": "reddit-username",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "topics": [],
+            "ttl": null,
+            "version_aliases": null,
+            "version_destroy_ttl": ""
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "celery_sa_access",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "index_key": "google-api-key",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxZe1h4=",
+            "id": "projects/deal-flow-engine/secrets/google-api-key/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/google-api-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "mumsnet-password",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdkEI=",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-password/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/mumsnet-password"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "mumsnet-username",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdK0A=",
+            "id": "projects/deal-flow-engine/secrets/mumsnet-username/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/mumsnet-username"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-client-id",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdDD4=",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-id/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-client-id"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-client-secret",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdHRo=",
+            "id": "projects/deal-flow-engine/secrets/reddit-client-secret/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-client-secret"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-password",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdMQ0=",
+            "id": "projects/deal-flow-engine/secrets/reddit-password/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-password"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        },
+        {
+          "index_key": "reddit-username",
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYdpU4=",
+            "id": "projects/deal-flow-engine/secrets/reddit-username/roles/secretmanager.secretAccessor/serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/reddit-username"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.celery_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "flask_sa_access_flask_secret_key",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYb+oU=",
+            "id": "projects/deal-flow-engine/secrets/flask-secret-key/roles/secretmanager.secretAccessor/serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/flask-secret-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.flask_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_secret_manager_secret_iam_member",
+      "name": "flask_sa_access_google_api_key",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwY5TxYcIok=",
+            "id": "projects/deal-flow-engine/secrets/google-api-key/roles/secretmanager.secretAccessor/serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "role": "roles/secretmanager.secretAccessor",
+            "secret_id": "projects/deal-flow-engine/secrets/google-api-key"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_secret_manager_secret.app_secrets",
+            "google_service_account.flask_sa"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "celery_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "celery-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for the Celery background task workers.",
+            "disabled": false,
+            "display_name": "Celery Worker Service Account",
+            "email": "celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/celery-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "114296361187637987074"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "flask_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "flask-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for the main Flask web application.",
+            "disabled": false,
+            "display_name": "Flask Application Service Account",
+            "email": "flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/flask-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "112076784339856219806"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "github_actions_sa",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "github-actions-sa",
+            "create_ignore_already_exists": null,
+            "description": "Service account for GitHub Actions to interact with GCP.",
+            "disabled": false,
+            "display_name": "GitHub Actions CI/CD Service Account",
+            "email": "github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "id": "projects/deal-flow-engine/serviceAccounts/github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "member": "serviceAccount:github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "name": "projects/deal-flow-engine/serviceAccounts/github-actions-sa@deal-flow-engine.iam.gserviceaccount.com",
+            "project": "deal-flow-engine",
+            "timeouts": null,
+            "unique_id": "115778952158244123657"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
+
+
+================================================================================
+
+--- File: backend/Dockerfile ---
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+ENV VENV_PATH="/opt/venv"
+ENV PATH="${VENV_PATH}/bin:${PATH}"
+
+# This environment variable forces Playwright to install browsers system-wide,
+# making them accessible to the non-root 'app' user. This permanently
+# fixes the "Executable doesn't exist" error.
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    build-essential \
+    netcat-openbsd \
+    postgresql-client \
+    dnsutils \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y openjdk-17-jdk unzip
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+RUN apt-get update && apt-get install -y --no-install-recommends unzip
+# Install Android SDK and necessary build tools
+RUN curl -o android-sdk.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+    && mkdir -p /opt/android-sdk \
+    && unzip android-sdk.zip -d /opt/android-sdk \
+    && mv /opt/android-sdk/cmdline-tools /opt/cmdline-tools \
+    && rm android-sdk.zip \
+    && export PATH="$PATH:/opt/cmdline-tools/bin" \
+    && yes | /opt/cmdline-tools/bin/sdkmanager --licenses && /opt/cmdline-tools/bin/sdkmanager --install "build-tools;34.0.0" "platforms;android-34"
+RUN echo "PATH: $PATH" && echo "ANDROID_HOME: $ANDROID_HOME"
+RUN pip install --no-cache-dir --upgrade pip
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# This command will now correctly install browsers in a system-wide location.
+
+RUN addgroup --system app && adduser --system --ingroup app app
+WORKDIR /home/app/web
+
+COPY --chown=app:app backend/ .
+COPY --chown=app:app entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+USER app
+
+EXPOSE 8000
+
+================================================================================
+
+--- File: backend/celery_app.py ---
+
+from celery import Celery, signals
+import os
+
+celery_app = Celery("tasks",
+                    broker=os.environ.get('CELERY_BROKER_URL'),
+                    backend=os.environ.get('CELERY_RESULT_BACKEND_URL'),
+                    include=[
+                        # 'app.tasks', # Obsolete, replaced by specific agent tasks
+                        'app.cso_tasks', # Chief Strategy Officer agent
+                        'app.cpo_tasks', # Chief Product Officer agent
+                        'app.source_mumsnet',
+                        'app.source_reddit',  
+                        'app.source_hacker_news',
+                        'app.cto_tasks'         # Chief Technology Officer agent
+                    ])
+
+@signals.setup_logging.connect
+def config_loggers(*args, **kwargs):
+    from logging.config import dictConfig
+    from app import log_config  # Import your log configuration
+    dictConfig(log_config)
+
+================================================================================
+
+--- File: backend/celery_worker.py ---
+
+from celery_app import celery_app
+
+================================================================================
+
+--- File: backend/config.ini ---
+
+[SETTINGS]
+# Future settings will go here
+
+================================================================================
+
+--- File: backend/config.py ---
+
+import os
+from functools import lru_cache
+from google.cloud import secretmanager
+from google.api_core import exceptions
+
+@lru_cache(maxsize=None)
+def get_secret(secret_id: str) -> str:
+    """
+    Fetches a secret from Google Secret Manager, with caching.
+    Returns the secret payload as a string, or an empty string if not found.
+    """
+    project_id = os.environ.get("GCP_PROJECT_ID")
+    if not project_id:
+        print("Warning: GCP_PROJECT_ID environment variable not set. Cannot fetch secrets.")
+        return ""
+
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except exceptions.NotFound:
+        print(f"Warning: Secret '{secret_id}' not found in project '{project_id}'.")
+        return ""
+    except Exception as e:
+        # In a real production app, this should go to a structured logger
+        print(f"FATAL: An unexpected error occurred while fetching secret '{secret_id}': {e}")
+        return ""
+
+class Config:
+    """Sets configuration from environment variables and Google Secret Manager."""
+    # Non-sensitive config from environment
+    POSTGRES_USER = os.environ.get('POSTGRES_USER')
+    POSTGRES_DB = os.environ.get('POSTGRES_DB')
+    CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL')
+    CELERY_RESULT_BACKEND_URL = os.environ.get('CELERY_RESULT_BACKEND_URL')
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Sensitive config fetched securely from Secret Manager
+    SECRET_KEY = get_secret('flask-secret-key')
+    POSTGRES_PASSWORD = get_secret('postgres-password')
+    GOOGLE_API_KEY = get_secret('google-api-key')
+    MUMSNET_USERNAME = get_secret('mumsnet-username')
+    MUMSNET_PASSWORD = get_secret('mumsnet-password')
+    REDDIT_CLIENT_ID = get_secret('reddit-client-id')
+    REDDIT_CLIENT_SECRET = get_secret('reddit-client-secret')
+    REDDIT_USERNAME = get_secret('reddit-username')
+    REDDIT_PASSWORD = get_secret('reddit-password')
+
+    # Construct the database URI from its component parts
+    SQLALCHEMY_DATABASE_URI = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@db:5432/{POSTGRES_DB}"
+    REDIS_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+
+
+================================================================================
+
+--- File: backend/worker.py ---
+
+from gevent import monkey
+monkey.patch_all()
+
+from app import create_app
+from celery_app import celery_app
+
+# Create a Flask app instance for the Celery worker
+flask_app = create_app()
+
+# Update the Celery app's configuration from the Flask app's config
+celery_app.conf.update(flask_app.config)
+
+# Add a context-aware Task base class
+class ContextTask(celery_app.Task):
+    def __call__(self, *args, **kwargs):
+        with flask_app.app_context():
+            # This line is now corrected to properly call the task's run method
+            return self.run(*args, **kwargs)
+
+celery_app.Task = ContextTask
+
+================================================================================
+
+--- File: backend/wsgi.py ---
+
+from app import create_app
+
+app = create_app()
+
+================================================================================
+
+--- File: backend/app/__init__.py ---
+
+from __future__ import annotations
+import logging
+from flask import Flask
+from .extensions import db, migrate, socketio
+
+def create_app(config_class: type[Config] = Config) -> Flask:
+    """
+    Application factory. Celery is no longer configured here
+    to break the circular dependency.
+    """
+    app = Flask(__name__, static_folder='static', template_folder='templates')
+    app.config.from_object(config_class)
+
+    # Initialize extensions
+    db.init_app(app)
+    migrate.init_app(app, db)
+    socketio.init_app(app, message_queue=app.config['CELERY_BROKER_URL'])
+
+    # Import and register blueprints
+    from .api import api_bp
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
+
+    from .main import main_bp
+    app.register_blueprint(main_bp)
+
+    # Configure logging
+    _configure_logging(app)
+
+    return app
+
+def _configure_logging(app: Flask) -> None:
+    """Configures logging for the application."""
+    log_level = logging.DEBUG if app.debug else logging.INFO
+
+    # Create a file handler
+    file_handler = logging.FileHandler('app.log')
+    file_handler.setLevel(logging.WARNING)  # Log WARNING and above to file
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+
+    # Create a console handlert
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)  # Log INFO and above to console (or DEBUG in debug mode)
+    console_formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+
+    # Add handlers to the Flask app's logger
+    app.logger.addHandler(file_handler)
+    app.logger.addHandler(console_handler)
+
+================================================================================
+
+--- File: backend/app/api.py ---
+
+from __future__ import annotations
+from typing import Any
+from flask import Blueprint, Response, current_app, jsonify, request
+from sqlalchemy import select, desc
+from sqlalchemy.orm import Session
+from celery_app import celery_app
+from .extensions import db, socketio, redis_client
+from .models import AppIdea, IdeaStatus
+
+api_bp = Blueprint('api', __name__)
+
+PROGRESS_CURRENT_KEY = "discovery_progress_current"
+PROGRESS_TOTAL_KEY = "discovery_progress_total"
+
+@api_bp.route('/sourcing/start', methods=['POST'])
+def start_sourcing_task() -> Response:
+    try:
+        r = redis_client
+        r.set(PROGRESS_CURRENT_KEY, 0)
+        r.set(PROGRESS_TOTAL_KEY, 0)
+        socketio.emit('progress_update', {'current': 0, 'total': 0})
+        socketio.emit('log_message', {'data': 'Discovery cycle initiated...'})
+    except Exception as e:
+        current_app.logger.error(f"Could not reset Redis progress: {e}")
+
+    # Dispatch all sourcing tasks
+    celery_app.send_task('sourcing.mumsnet')
+    celery_app.send_task('sourcing.reddit')
+    celery_app.send_task('sourcing.hacker_news')
+
+    return jsonify({"message": "All sourcing tasks initiated."})
+
+@api_bp.route('/ideas', methods=['GET', 'POST'])
+def handle_ideas() -> Response | tuple[Response, int]:
+    db_session: Session = db.session
+    if request.method == 'POST':
+        data: dict | None = request.get_json()
+        if not isinstance(data, dict) or not all(k in data for k in ['source_url', 'source_name', 'raw_text']):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        if db_session.execute(select(AppIdea).filter_by(source_url=data['source_url'])).first():
+            return jsonify({"error": f"An idea with source_url '{data['source_url']}' already exists."}), 409
+
+        new_idea = AppIdea(
+            source_url=data['source_url'],
+            source_name=data['source_name'],
+            raw_text=data['raw_text']
+            # Status now defaults to PENDING_CSO_VETTING
+        )
+        db_session.add(new_idea)
+        db_session.commit()
+
+        # The new idea is now sent to the CSO for vetting, not directly to an analyst.
+        celery_app.send_task('tasks.cso_vetting', args=[new_idea.id])
+
+        return jsonify({
+            "message": "AppIdea created and dispatched for CSO vetting",
+            "idea": {"id": new_idea.id, "status": new_idea.status.value}
+        }), 201
+
+    # GET request
+    ideas = db_session.execute(select(AppIdea).order_by(desc(AppIdea.created_at))).scalars().all()
+    # Use the new to_dict() method for serialization
+    ideas_list = [idea.to_dict() for idea in ideas]
+    return jsonify(ideas_list)
+
+
+@api_bp.route('/status', methods=['GET'])
+def get_dependency_status() -> Response:
+    db_status = 'ok'
+    redis_status = 'ok'
+    try:
+        db.session.execute(db.text('SELECT 1'))
+    except Exception:
+        db_status = 'error'
+    try:
+        redis_client.ping()
+    except Exception:
+        redis_status = 'error'
+    return jsonify({
+        "database_status": db_status,
+        "redis_status": redis_status,
+        "api_status": "online"
+    })
+
+@api_bp.route('/ideas/<int:idea_id>/approve', methods=['POST'])
+def approve_idea(idea_id: int) -> Response | tuple[Response, int]:
+    """Approves an idea, saves feedback, and triggers the development kickoff."""
+    db_session: Session = db.session
+    idea = db_session.get(AppIdea, idea_id)
+    if not idea:
+        return jsonify({"error": "Idea not found"}), 404
+
+    data = request.get_json() or {}
+    feedback = data.get('ceo_feedback', '')
+
+    idea.status = IdeaStatus.APPROVED_FOR_DEV
+    idea.ceo_feedback = feedback
+    db_session.commit()
+
+    log_msg = f'[CEO] Idea {idea.id} approved for development. Kicking off CTO task.'
+    socketio.emit('log_message', {'data': log_msg})
+    socketio.emit('idea_update', {'idea': idea.to_dict()})
+
+    # Dispatch the placeholder task for the CTO agent
+    celery_app.send_task('tasks.cto_development_kickoff', args=[idea.id], countdown=5)  # Add a delay
+
+    return jsonify({
+        "message": f"Idea {idea_id} approved and sent for development.",
+        "idea": idea.to_dict()
+    })
+
+@api_bp.route('/ideas/<int:idea_id>/reject', methods=['POST'])
+def reject_idea(idea_id: int) -> Response | tuple[Response, int]:
+    """Rejects an idea and saves the feedback."""
+    db_session: Session = db.session
+    idea = db_session.get(AppIdea, idea_id)
+    if not idea:
+        return jsonify({"error": "Idea not found"}), 404
+
+    data = request.get_json() or {}
+    feedback = data.get('ceo_feedback', '')
+
+    idea.status = IdeaStatus.REJECTED_BY_CEO
+    idea.ceo_feedback = feedback
+    db_session.commit()
+
+    log_msg = f'[CEO] Idea {idea.id} rejected. Feedback: "{feedback}"'
+    socketio.emit('log_message', {'data': log_msg})
+    socketio.emit('idea_update', {'idea': idea.to_dict()})
+
+    return jsonify({
+        "message": f"Idea {idea_id} has been rejected.",
+        "idea": idea.to_dict()
+    })
+
+
+================================================================================
+
+--- File: backend/app/cpo_tasks.py ---
+
+from __future__ import annotations
+import json
+import time
+import logging
+import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
+from flask import current_app
+from celery_app import celery_app
+from .extensions import db, socketio
+from .models import AppIdea, IdeaStatus
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task(
+    name='tasks.cpo_analysis',
+    rate_limit='12/m',
+    autoretry_for=(google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=5
+)
+def cpo_analysis_task(idea_id: int) -> int:
+    """
+    Acts as the Chief Product Officer. Receives a CSO-vetted idea and generates
+    the full product brief (Title, Description, SWOT) for CEO review.
+    """
+    idea = db.session.get(AppIdea, idea_id)
+    if not idea:
+        raise ValueError(f"Idea {idea_id} not found for CPO analysis.")
+
+    socketio.emit('log_message', {'data': f'[CPO] Starting analysis for Idea {idea.id}'})
+
+    try:
+        api_key = current_app.config.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not found in application configuration.")
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        prompt = f"""
+        You are the Chief Product Officer of a mobile app startup.
+        For the following raw user idea, your task is to create a complete Product Brief.
+        Return ONLY a raw JSON object with four keys:
+        1. "ai_generated_title": A concise, catchy, and descriptive title.
+        2. "ai_generated_summary": A detailed one-paragraph summary of the core problem and solution.
+        3. "competition_analysis": A brief, one-paragraph analysis of the potential competition landscape, assuming it is low (as it has passed CSO vetting). Mention what a successful app in this space needs to do to win.
+        4. "swot_analysis": A JSON object with four keys ("strengths", "weaknesses", "opportunities", "threats"), each containing a bulleted list of 2-3 points.
+
+        RAW IDEA TEXT: ---{idea.raw_text}---
+        """
+        response = model.generate_content(prompt)
+        time.sleep(1)
+        cleaned_response_text = response.text.strip().replace('```json', '').replace('```', '').strip()
+        try:
+            analysis_data = json.loads(cleaned_response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"[CPO] JSON decode error for Idea {idea.id}: {e}\nResponse text: {cleaned_response_text}")
+            raise ValueError(f"Invalid JSON format from Gemini: {e}") from e
+
+        if not all(k in analysis_data for k in ["ai_generated_title", "ai_generated_summary", "competition_analysis", "swot_analysis"]):
+            logger.warning(f"[CPO] Incomplete data from Gemini for Idea {idea.id}: {analysis_data}")
+            raise ValueError("Incomplete product brief data received from Gemini.")
+
+        with db.session.begin_nested(): # Use a nested transaction for safety.
+            idea.ai_generated_title = analysis_data.get("ai_generated_title")
+            idea.ai_generated_summary = analysis_data.get("ai_generated_summary")
+            idea.competition_analysis = analysis_data.get("competition_analysis")
+            idea.swot_analysis = analysis_data.get("swot_analysis")
+            idea.status = IdeaStatus.PENDING_CEO_APPROVAL
+            db.session.add(idea)
+
+        db.session.commit()  # Commit the outer transaction
+        socketio.emit('log_message', {'data': f'[CPO] Analysis complete for Idea {idea.id}.'})
+        socketio.emit('idea_update', {'idea': idea.to_dict()})  # Emit update after commit
+
+        return idea.id
+    except (google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable) as e:
+        socketio.emit('log_message', {'data': f'[CPO WARNING] Gemini API issue for Idea {idea.id}: {e}. Will retry.'})
+        raise  # Re-raise for Celery retry
+    except Exception as e:
+        socketio.emit('log_message', {'data': f'[CPO FATAL] Analysis failed for Idea {idea.id}: {e}'})
+        raise # Re-raise to signal task failure
+
+
+================================================================================
+
+--- File: backend/app/cso_tasks.py ---
+
+from __future__ import annotations
+import time
+import random
+import logging
+from celery_app import celery_app
+from .extensions import db, socketio
+from .models import AppIdea, IdeaStatus
+
+logger = logging.getLogger(__name__)
+
+def _check_competition(idea_text: str) -> bool:
+    """Simulates checking Google Play Store competition. Returns True if competition is low."""
+    # In a real scenario, this would involve scraping or API calls to the Play Store.
+    # We simulate a 10% chance of an idea having low competition.
+    low_competition = random.random() < 0.1
+    logger.info(f"Simulated competition check for: '{idea_text[:50]}...' - Low competition: {low_competition}")
+    return low_competition
+
+@celery_app.task(name='tasks.cso_vetting')
+def cso_vetting_task(idea_id: int) -> str:
+    """
+    Acts as the Chief Strategy Officer. Receives a new idea, checks for market
+    competition, and either rejects it or passes it to the CPO for analysis.
+    """
+    try:
+        idea = db.session.get(AppIdea, idea_id)
+        if not idea:
+            raise ValueError(f"Idea {idea_id} not found.")
+
+        socketio.emit('log_message', {'data': f'[CSO] Vetting Idea {idea.id} for market competition.'})
+        logger.info(f"Starting vetting for idea {idea.id}: '{idea.raw_text[:50]}...'")
+        time.sleep(1) # Simulate work
+
+        if _check_competition(idea.raw_text):
+            socketio.emit('log_message', {'data': f'[CSO] Low competition found for Idea {idea.id}. Passing to CPO.'})
+            logger.info(f"Idea {idea.id} passed vetting.")
+            idea.status = IdeaStatus.PENDING_CPO_ANALYSIS
+            db.session.commit()
+            # Chain this task to the CPO task with a small delay
+            celery_app.send_task('tasks.cpo_analysis', args=[idea.id], countdown=3)
+            return f"Idea {idea.id} passed vetting. Sent to CPO."
+        else:
+            socketio.emit('log_message', {'data': f'[CSO] High competition found for Idea {idea.id}. Rejecting.'})
+            logger.info(f"Idea {idea.id} rejected due to high competition.")
+            idea.status = IdeaStatus.REJECTED_BY_CSO  # Consistent rejection status
+            db.session.commit()
+            return f"Idea {idea.id} rejected due to high market competition."
+
+    except ValueError as e:
+        error_message = f"[CSO ERROR] {e}"
+        socketio.emit('log_message', {'data': error_message})
+        logger.error(error_message)
+        return f"CSO vetting task failed: {e}"
+    except Exception as e:
+        db.session.rollback()
+        error_message = f"[CSO FATAL] An unexpected error occurred during vetting: {e}"
+        socketio.emit('log_message', {'data': error_message})
+        logger.exception(error_message) # Use logger.exception to include traceback
+        raise  # Re-raise the exception to signal task failure to Celery
+
+================================================================================
+
+--- File: backend/app/cto_tasks.py ---
+
+from __future__ import annotations
+import json
+import time
+import os
+import subprocess
+import logging
+from pathlib import Path
+
+import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
+from flask import current_app
+
+from celery_app import celery_app
+from .extensions import db, socketio
+from .models import AppIdea, IdeaStatus
+
+logger = logging.getLogger(__name__)
+
+def _generate_app_description(idea: AppIdea) -> str:
+    """
+    Generates a detailed app description suitable for a code generation prompt.
+    """
+    api_key = current_app.config.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError("GOOGLE_API_KEY not found in application configuration.")
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')  # Or another suitable model
+
+        # Define an improved prompt for Gemini to generate a complete Android project
+        prompt = f"Generate an Android app based on the idea: {idea.ai_generated_summary}"
+
+        response = model.generate_content(prompt, request_options={'timeout': 300})  # Increased timeout
+
+        if not response.text:
+            raise ValueError("Gemini returned an empty response.")
+
+        return response.text  # Return the generated code as a string
+
+    except (google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable) as e:
+        socketio.emit('log_message', {'data': f'[CTO WARNING] Gemini API error (rate limit or service issue): {e}'})
+        raise  # Re-raise for Celery retry on transient errors
+    except Exception as e:
+        socketio.emit('log_message', {'data': f'[CTO FATAL] Code generation failed: {e}'})
+        raise
+    # Placeholder functionality - returns an empty string
+    return ""
+
+
+================================================================================
+
+--- File: backend/app/extensions.py ---
+
+from __future__ import annotations
+import os
+import redis
+from typing import Any
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_socketio import SocketIO
+
+db: SQLAlchemy = SQLAlchemy()
+migrate: Migrate = Migrate()
+socketio: SocketIO = SocketIO()
+
+
+================================================================================
+
+--- File: backend/app/main.py ---
+
+from flask import Blueprint, render_template, current_app
+from .extensions import socketio
+
+main_bp = Blueprint('main', __name__, template_folder='templates', static_folder='static')
+
+# --- Routes ---
+@main_bp.route('/')
+def index() -> str:
+    return render_template('index.html')
+
+# --- Socket.IO Events ---
+@socketio.on('connect')
+def handle_connect() -> None:
+    current_app.logger.info('Dashboard client connected')
+    socketio.emit('log_message', {'data': 'Real-time connection established.'})
+
+@socketio.on('disconnect')
+def handle_disconnect() -> None:
+    current_app.logger.info('Dashboard client disconnected')
+
+================================================================================
+
+--- File: backend/app/models.py ---
+
+from __future__ import annotations
+import datetime
+import enum
+from typing import Any
+from sqlalchemy import DateTime, Enum as DBEnum, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+from .extensions import db
+
+class IdeaStatus(enum.Enum):
+    """Defines the possible states of an AppIdea in the factory pipeline."""
+    PENDING_CSO_VETTING = "PENDING_CSO_VETTING"
+    PENDING_CPO_ANALYSIS = "PENDING_CPO_ANALYSIS"
+    PENDING_CEO_APPROVAL = "PENDING_CEO_APPROVAL"
+    REJECTED_BY_CEO = "REJECTED_BY_CEO"
+    REJECTED_BY_CSO = "REJECTED_BY_CSO"
+    APPROVED_FOR_DEV = "APPROVED_FOR_DEV"
+    PENDING_CEO_TESTING = "PENDING_CEO_TESTING"
+    PUBLISHED = "PUBLISHED"
+
+class AppIdea(db.Model):
+
+    """
+    Represents a single application idea as it moves through the automated
+    discovery, vetting, analysis, development, and publishing pipeline.
+    """
+    __tablename__ = 'app_ideas'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_url: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    source_name: Mapped[str] = mapped_column(String(100))
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[IdeaStatus] = mapped_column(
+        DBEnum(IdeaStatus, name="ideastatus", create_type=False),
+        default=IdeaStatus.PENDING_CSO_VETTING,
+        index=True
+    )
+    ceo_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    apk_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # AI-Generated Fields
+    ai_generated_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ai_generated_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    competition_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    swot_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    # Timestamp fields using database-side defaults for reliability
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes the object to a dictionary for API responses."""
+        return {
+            "id": self.id,
+            "source_name": self.source_name,
+            "source_url": self.source_url,
+            "raw_text": self.raw_text,
+            "status": self.status.value,
+            "ceo_feedback": self.ceo_feedback,
+            "apk_path": self.apk_path,
+            "ai_title": self.ai_generated_title,
+            "ai_summary": self.ai_generated_summary,
+            "competition_analysis": self.competition_analysis,
+            "swot_analysis": self.swot_analysis,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+================================================================================
+
+--- File: backend/app/source_hacker_news.py ---
+
+from __future__ import annotations
+import requests
+import time
+from celery_app import celery_app
+from flask import current_app
+from .extensions import socketio, redis_client  # Assume you have a Redis client
+
+API_URL = "http://web:8000/api/v1/ideas"
+SOURCE_NAME = "Hacker News"
+HN_API_BASE_URL = "https://hacker-news.firebaseio.com/v0"
+PROGRESS_CURRENT_KEY = "discovery_progress_current"
+PROGRESS_TOTAL_KEY = "discovery_progress_total"
+POST_REQUEST_TIMEOUT = 15  # Increased timeout
+
+def _fetch_item(session: requests.Session, item_id: int) -> dict | None:
+    url = f"{HN_API_BASE_URL}/item/{item_id}.json"
+    try:
+        response = session.get(url, timeout=20.0)  # Increased timeout
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        socketio.emit('log_message', {'data': f'[HN ERROR] Failed to fetch item {item_id}: {e}'})
+        return None
+
+@celery_app.task(name="sourcing.hacker_news", time_limit=7200)  # Time limit of 2 hours
+def scrape_hacker_news_task() -> str:
+    socketio.emit('log_message', {'data': '[HN] Sourcing task started.'})
+    ideas_found = 0
+    with requests.Session() as session:
+        try:
+            top_stories_url = f"{HN_API_BASE_URL}/topstories.json"
+            response = session.get(top_stories_url, timeout=30.0)  # Increased timeout
+            response.raise_for_status()
+            top_story_ids = response.json()[:60]  # Increased limit
+            redis_client.incrby(PROGRESS_TOTAL_KEY, len(top_story_ids))
+        except requests.RequestException as e:
+            socketio.emit('log_message', {'data': f'[HN ERROR] Could not fetch top stories: {e}'})
+            return "Failed to fetch top stories."
+
+        for item_id in top_story_ids:
+            redis_client.incr(PROGRESS_CURRENT_KEY)  # Increment current progress
+            item = _fetch_item(session, item_id)
+            if item and item.get("type") == "story" and item.get("url"):
+                try:
+                    post_response = session.post(  # Post to API with increased timeout
+                        API_URL,
+                        json={
+                            "source_url": item["url"],
+                            "source_name": SOURCE_NAME,
+                            "raw_text": item.get("title", "No Title"),
+                        },
+                        timeout=10.0,
+
+                    )
+                    if post_response.status_code == 201:
+                        ideas_found += 1
+                except requests.RequestException as e:
+                    socketio.emit('log_message', {'data': f"[HN ERROR] Could not post idea '{item.get('title')}': {e}"})
+                time.sleep(3)  # Added a more polite delay
+            else:
+                time.sleep(1)  # Small delay for non-story items
+
+    socketio.emit('log_message', {'data': f'[HN] Sourcing finished. Queued {ideas_found} ideas.'})
+    return f"Completed Hacker News sourcing. Submitted {ideas_found} new ideas."
+
+================================================================================
+
+--- File: backend/app/source_mumsnet.py ---
+
+from __future__ import annotations
+import json
+import time
+import httpx
+import logging
+from celery_app import celery_app
+from playwright.sync_api import sync_playwright, Page, BrowserContext, Error
+from flask import current_app
+from .extensions import socketio, redis_client
+
+API_URL = "http://web:8000/api/v1/ideas"
+SOURCE_NAME = "Mumsnet"
+TARGET_URL = "https://www.mumsnet.com/talk/am_i_being_unreasonable"
+STATE_FILE = "/tmp/mumsnet_state.json"
+PROGRESS_CURRENT_KEY = "discovery_progress_current"
+PROGRESS_TOTAL_KEY = "discovery_progress_total"
+
+logger = logging.getLogger(__name__)
+
+def get_playwright_context() -> tuple[BrowserContext, callable] | tuple[None, None]:
+    try:
+        pw = sync_playwright().start()
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36")
+        def cleanup():
+            context.close()
+            browser.close()
+            pw.stop()
+        return context, cleanup
+    except Error as e:
+        logger.error(f"[Playwright ERROR] Failed to initialize: {e}")
+        return None, None
+
+def ensure_login(page: Page, context: BrowserContext) -> bool:
+    username = current_app.config.get("MUMSNET_USERNAME")
+    password = current_app.config.get("MUMSNET_PASSWORD")
+    if not username or not password:
+        socketio.emit('log_message', {'data': '[Mumsnet ERROR] Credentials not found in application configuration.'})
+        raise ValueError("Mumsnet credentials not found.")
+    try:
+        with open(STATE_FILE, 'r') as f:
+            storage_state = json.load(f)
+        context.add_cookies(storage_state['cookies'])
+        page.goto(TARGET_URL, timeout=30000) # Quick check to see if cookies are valid
+        if "Log in" in page.content():
+            raise FileNotFoundError("Session expired")
+        socketio.emit('log_message', {'data': '[Mumsnet] Saved session state loaded.'})
+        return True
+    except (FileNotFoundError, Error):
+        socketio.emit('log_message', {'data': '[Mumsnet] No valid session. Performing fresh login.'})
+        page.goto("https://www.mumsnet.com/account/login", timeout=60000)
+        page.fill('input[name="email"]', username)
+        page.fill('input[name="password"]', password)
+        page.click('button[type="submit"]')
+        page.wait_for_url("https://www.mumsnet.com/", timeout=60000, wait_until="domcontentloaded")
+        storage = {"cookies": context.cookies()}
+        with open(STATE_FILE, 'w') as f:
+            json.dump(storage, f)
+        logger.info('[Mumsnet] Login successful and session saved.')
+        return True
+
+@celery_app.task(name="sourcing.mumsnet")
+def scrape_mumsnet() -> str:
+    logger.info('[Mumsnet] Sourcing task started.')
+    context, cleanup = get_playwright_context()
+    if not context:
+        return "Mumsnet sourcing failed: Could not start Playwright."
+    
+    page = context.new_page()
+    try:
+        if not ensure_login(page, context):
+            raise Exception("Login failed or credentials not configured.")
+
+        page.goto(TARGET_URL, timeout=60000)
+        thread_elements = page.locator('div[data-thread-id]').all()
+        if not thread_elements:
+            raise Exception("No discussion threads found on page.")
+
+        r = redis_client
+        r.set(PROGRESS_TOTAL_KEY, len(thread_elements))
+        ideas_found = 0
+
+        for i, element in enumerate(thread_elements):
+            r.set(PROGRESS_CURRENT_KEY, i + 1)
+            socketio.emit('progress_update', {'current': i + 1, 'total': len(thread_elements)})
+            try:
+                title_element = element.locator('h2 a').first
+                title = title_element.inner_text()
+                url = title_element.get_attribute('href')
+                full_url = f"https://www.mumsnet.com{url}" if not (url.startswith('http') or url.startswith('//')) else url
+                
+                with httpx.Client() as client:
+                    response = client.post(
+                        "http://web:8000/api/v1/ideas",
+                        json={"source_url": full_url, "source_name": SOURCE_NAME, "raw_text": title},
+                        timeout=10.0
+                    )
+                    if response.status_code == 201:
+                        ideas_found += 1
+                    time.sleep(2)  # Polite delay
+            except Exception as e:
+                socketio.emit('log_message', {'data': f'[Mumsnet ERROR] Could not process thread: {e}'})
+        
+        logger.info(f'[Mumsnet] Sourcing finished. Queued {ideas_found} ideas.')
+        return f"Completed Mumsnet sourcing. Submitted {ideas_found} new ideas."
+    except Exception as e:
+        error_message = f'[Mumsnet FATAL] Sourcing failed: {e}'
+        socketio.emit('log_message', {'data': error_message})
+        return error_message
+    finally:
+        if cleanup:
+            cleanup()
+
+================================================================================
+
+--- File: backend/app/source_reddit.py ---
+
+from __future__ import annotations
+import requests
+import time
+import praw
+import logging
+from flask import current_app
+from celery_app import celery_app
+from .extensions import socketio, redis_client
+
+API_URL = "http://web:8000/api/v1/ideas"
+SOURCE_NAME = "Reddit"
+SUBREDDITS = ["SomebodyMakeThis", "AppIdeas", "SideProject"]
+USER_AGENT = "script:VVS-Discovery-Agent:v1.2 (by /u/EmotionalGap3249)"
+PROGRESS_CURRENT_KEY = "discovery_progress_current"
+PROGRESS_TOTAL_KEY = "discovery_progress_total"
+
+logger = logging.getLogger(__name__)
+
+def get_reddit_instance() -> praw.Reddit | None:
+    required_keys = ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"]
+    if not all(current_app.config.get(k) for k in required_keys):
+        error_msg = "[Reddit ERROR] Reddit credentials not fully configured in application configuration."
+        logger.error(error_msg)
+        return None
+    return praw.Reddit(
+        client_id=current_app.config.get("REDDIT_CLIENT_ID"),
+        client_secret=current_app.config.get("REDDIT_CLIENT_SECRET"),
+        user_agent=USER_AGENT,
+        username=current_app.config.get("REDDIT_USERNAME"),
+        password=current_app.config.get("REDDIT_PASSWORD"),
+        requestor_kwargs={"timeout": 60}
+    )
+
+@celery_app.task(name="sourcing.reddit")
+def scrape_reddit_task() -> str:
+    reddit = get_reddit_instance()
+    if not reddit:
+        return "Reddit scraping failed due to configuration."
+
+    ideas_found = 0
+    logger.info("[Reddit] Sourcing task started.")
+    
+    total_posts_to_scan = len(SUBREDDITS) * 10
+    redis_client.incrby(PROGRESS_TOTAL_KEY, total_posts_to_scan)
+
+    with requests.Session() as client:
+        for subreddit_name in SUBREDDITS:
+            try:
+                subreddit = reddit.subreddit(subreddit_name)
+                for submission in subreddit.hot(limit=10):
+                    redis_client.incr(PROGRESS_CURRENT_KEY)
+                    if submission.stickied:
+                        continue
+                    
+                    full_url = f"https://www.reddit.com{submission.permalink}"
+                    post_response = client.post(
+                        API_URL,
+                        json={
+                            "source_url": full_url,
+                            "source_name": f"{SOURCE_NAME}::r/{subreddit_name}",
+                            "raw_text": f"{submission.title}\n\n{submission.selftext}",
+                        },
+                        timeout=10.0,
+                    )
+                    if post_response.status_code == 201:
+                        ideas_found += 1
+                    time.sleep(2) # Polite delay
+            except praw.exceptions.APIException as e:
+                logger.error(f"[Reddit API ERROR] Failed to scrape r/{subreddit_name} due to Reddit API: {e}")
+                continue
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[Reddit HTTP ERROR] Failed to scrape r/{subreddit_name} due to network issue: {e}")
+
+    logger.info(f"[Reddit] Sourcing finished. Queued {ideas_found} ideas.")
+    return f"Completed Reddit sourcing. Submitted {ideas_found} new ideas."
+
+================================================================================
+
+--- File: backend/app/static/js/main.js ---
+
+document.addEventListener('DOMContentLoaded', () => {
+    const statusApiUrl = '/api/v1/status';
+    const ideasApiUrl = '/api/v1/ideas';
+    const sourcingApiUrl = '/api/v1/sourcing/start';
+
+    const apiStatusText = document.getElementById('api-status').querySelector('.status-text');
+    const apiStatusLight = document.getElementById('api-status').querySelector('.status-light');
+    const dbStatusText = document.getElementById('db-status').querySelector('.status-text');
+    const dbStatusLight = document.getElementById('db-status').querySelector('.status-light');
+    const redisStatusText = document.getElementById('redis-status').querySelector('.status-text');
+    const redisStatusLight = document.getElementById('redis-status').querySelector('.status-light');
+
+    const ideaQueue = document.getElementById('idea-queue');
+    const startCycleBtn = document.getElementById('start-cycle-btn');
+    const logViewer = document.getElementById('log-viewer');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    // Clear the placeholder template from the HTML
+    const placeholder = document.getElementById('idea-template-placeholder');
+    if (placeholder) {
+        placeholder.remove();
+    }
+
+    function addLogMessage(message) {
+        const logEntry = document.createElement('div');
+        const timestamp = new Date().toLocaleTimeString();
+        logEntry.textContent = `[${timestamp}] ${message}`;
+        logViewer.appendChild(logEntry);
+        logViewer.scrollTop = logViewer.scrollHeight;
+    }
+
+    function updateStatus(light, text, status) {
+        light.className = 'status-light';
+        if (status === 'ok' || status === 'online') {
+            light.classList.add('green');
+            text.textContent = 'Online';
+        } else {
+            light.classList.add('red');
+            text.textContent = 'Error';
+        }
+    }
+
+    async function checkSystemStatus() {
+        try {
+            const response = await fetch(statusApiUrl);
+            if (!response.ok) throw new Error('Network response was not ok');
+            const data = await response.json();
+            updateStatus(apiStatusLight, apiStatusText, data.api_status);
+            updateStatus(dbStatusLight, dbStatusText, data.database_status);
+            updateStatus(redisStatusLight, redisStatusText, data.redis_status);
+        } catch (error) {
+            addLogMessage(`Error fetching system status: ${error.message}`);
+            updateStatus(apiStatusLight, apiStatusText, 'error');
+            updateStatus(dbStatusLight, dbStatusText, 'error');
+            updateStatus(redisStatusLight, redisStatusText, 'error');
+        }
+    }
+
+    function createIdeaCard(idea) {
+        const card = document.createElement('div');
+        card.className = 'idea-card';
+        card.id = `idea-${idea.id}`;
+        card.dataset.status = idea.status;
+
+        const createSwotList = (items) => {
+            if (!items || !Array.isArray(items)) return '<li>No data.</li>';
+            return items.map(item => `<li>${item}</li>`).join('');
+        };
+
+        const swot = idea.swot_analysis || {};
+
+        card.innerHTML = `
+            <h3>${idea.ai_title || 'Analysis In Progress...'}</h3>
+            <div class="idea-status">Status: <span>${idea.status}</span></div>
+            <p class="source-info"><strong>Source:</strong> <a href="${idea.source_url}" target="_blank" rel="noopener noreferrer">${idea.source_name}</a></p>
+
+            <h4>AI-Generated Summary</h4>
+            <div class="description-box">
+                ${idea.ai_summary ? idea.ai_summary.replace(/\n/g, '<br>') : 'AI-generated summary will appear here.'}
+            </div>
+
+            <h4>Competition Analysis</h4>
+            <div class="analysis-box">
+                ${idea.competition_analysis || 'Competition analysis will appear here.'}
+            </div>
+
+            <h4>SWOT Analysis</h4>
+            <div class="swot-grid">
+                <div class="swot-item strengths">
+                    <h5>Strengths</h5>
+                    <ul class="swot-list">${createSwotList(swot.strengths)}</ul>
+                </div>
+                <div class="swot-item weaknesses">
+                    <h5>Weaknesses</h5>
+                    <ul class="swot-list">${createSwotList(swot.weaknesses)}</ul>
+                </div>
+                <div class="swot-item opportunities">
+                    <h5>Opportunities</h5>
+                    <ul class="swot-list">${createSwotList(swot.opportunities)}</ul>
+                </div>
+                <div class="swot-item threats">
+                    <h5>Threats</h5>
+                    <ul class="swot-list">${createSwotList(swot.threats)}</ul>
+                </div>
+            </div>
+
+            <div class="ceo-action-panel">
+                <h4>CEO Review & Action</h4>
+                <textarea class="feedback-textarea" placeholder="Provide feedback for rejection or revision...">${idea.ceo_feedback || ''}</textarea>
+                <div class="action-buttons">
+                    <button class="btn reject-btn" data-id="${idea.id}">Reject</button>
+                    <button class="btn approve-btn" data-id="${idea.id}">Approve for Dev</button>
+                </div>
+            </div>
+        `;
+        return card;
+    }
+
+    async function fetchAndDisplayIdeas() {
+        try {
+            const response = await fetch(ideasApiUrl);
+            if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+            const ideas = await response.json();
+            ideaQueue.innerHTML = '';
+            if (ideas.length === 0) {
+                ideaQueue.innerHTML = '<p id="loading-message">The review queue is empty. Run a discovery cycle to find new ideas.</p>';
+            } else {
+                ideas.forEach(idea => ideaQueue.appendChild(createIdeaCard(idea)));
+            }
+        } catch (error) {
+            addLogMessage(`Error fetching ideas: ${error.message}`);
+            ideaQueue.innerHTML = '<p id="loading-message" style="color: var(--status-error);">Error loading ideas.</p>';
+        }
+    }
+
+    async function startDiscoveryCycle() {
+        startCycleBtn.disabled = true;
+        startCycleBtn.classList.add('loading');
+        logViewer.innerHTML = '';
+        addLogMessage('Requesting new discovery cycle...');
+        progressBar.style.width = '0%';
+        progressText.textContent = 'Initializing...';
+        try {
+            const response = await fetch(sourcingApiUrl, { method: 'POST' });
+            if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+            const data = await response.json();
+            addLogMessage(`Cycle initiated successfully: ${data.message}`);
+        } catch (error) {
+            addLogMessage(`Error starting cycle: ${error.message}`);
+            startCycleBtn.disabled = false;
+            startCycleBtn.classList.remove('loading');
+        }
+    }
+
+    // --- CEO Actions using Event Delegation ---
+    ideaQueue.addEventListener('click', async (event) => {
+        const target = event.target;
+        const isApprove = target.classList.contains('approve-btn');
+        const isReject = target.classList.contains('reject-btn');
+
+        if (!isApprove && !isReject) return;
+
+        const ideaId = target.dataset.id;
+        const card = target.closest('.idea-card');
+        const feedbackTextarea = card.querySelector('.feedback-textarea');
+        const feedback = feedbackTextarea.value.trim();
+
+        const endpoint = isApprove ? `/api/v1/ideas/${ideaId}/approve` : `/api/v1/ideas/${ideaId}/reject`;
+        const action = isApprove ? 'Approving' : 'Rejecting';
+
+        card.querySelectorAll('.btn').forEach(button => button.disabled = true);
+        addLogMessage(`${action} idea ${ideaId}...`);
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ceo_feedback: feedback }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Server responded with status: ${response.status}`);
+            }
+            const result = await response.json();
+            addLogMessage(result.message);
+            // The socket 'idea_update' event will handle re-rendering the card with the new status.
+        } catch (error) {
+            addLogMessage(`Error ${action.toLowerCase()} idea ${ideaId}: ${error.message}`);
+            card.querySelectorAll('.btn').forEach(button => button.disabled = false);
+        }
+    });
+
+    // --- Socket.IO Event Handling ---
+    const socket = io({ transports: ['websocket'] });
+    socket.on('connect', () => addLogMessage('Real-time connection established.'));
+    socket.on('disconnect', () => addLogMessage('Real-time connection lost.'));
+    socket.on('log_message', (msg) => addLogMessage(msg.data));
+
+    socket.on('idea_update', (data) => {
+        addLogMessage(`Received update for Idea ${data.idea.id}. Status: ${data.idea.status}`);
+        const idea = data.idea;
+        const existingCard = document.getElementById(`idea-${idea.id}`);
+        const newCard = createIdeaCard(idea);
+
+        const loadingMessage = document.getElementById('loading-message');
+        if (loadingMessage) loadingMessage.remove();
+
+        if (existingCard) {
+            existingCard.replaceWith(newCard);
+        } else {
+            ideaQueue.prepend(newCard);
+        }
+    });
+
+    socket.on('progress_update', (data) => {
+        const current = data.current || 0;
+        const total = data.total || 1;
+        const percentage = Math.min(100, Math.round((current / total) * 100));
+        progressBar.style.width = `${percentage}%`;
+        progressText.textContent = `Processing... ${current} of ${total} (${percentage}%)`;
+
+        if (current >= total && total > 0) {
+            setTimeout(() => {
+                progressText.textContent = 'Cycle Complete';
+                startCycleBtn.disabled = false;
+                startCycleBtn.classList.remove('loading');
+            }, 2000);
+        }
+    });
+
+    startCycleBtn.addEventListener('click', startDiscoveryCycle);
+
+    // --- Initial Load ---
+    checkSystemStatus();
+    setInterval(checkSystemStatus, 30000);
+    fetchAndDisplayIdeas();
+});
+
+
+================================================================================
+
+--- File: backend/app/static/css/style.css ---
+
+:root {
+    --bg-color: #121212;
+    --surface-color: #1e1e1e;
+    --primary-color: #bb86fc;
+    --text-color: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --border-color: #333;
+    --status-ok: #00e676;
+    --status-error: #ff5252;
+    --status-grey: #616161;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 2rem;
+}
+
+.container {
+    max-width: 1600px;
+    margin: auto;
+}
+
+header h1 {
+    font-weight: 300;
+    letter-spacing: 2px;
+    text-align: center;
+    color: var(--primary-color);
+    margin-bottom: 2rem;
+}
+
+.status-panel,
+.progress-panel {
+    background-color: var(--surface-color);
+    padding: 1.5rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 2rem;
+}
+
+.status-panel {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.status-light {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+
+.status-light.grey {
+    background-color: var(--status-grey);
+}
+
+.status-light.green {
+    background-color: var(--status-ok);
+}
+
+.status-light.red {
+    background-color: var(--status-error);
+}
+
+#start-cycle-btn {
+    margin-left: auto;
+    background-color: var(--primary-color);
+    color: #000;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#start-cycle-btn:hover {
+    background-color: #a75ff9;
+}
+
+#start-cycle-btn:active {
+    background-color: #8e44ad;
+}
+
+#start-cycle-btn.loading {
+    cursor: not-allowed;
+    background-color: #6c5b7b;
+}
+
+.progress-bar-container {
+    width: 100%;
+    background-color: #333;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+    width: 0%;
+    height: 10px;
+    background-color: var(--primary-color);
+    transition: width 0.3s ease-in-out;
+}
+
+.main-content {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 2rem;
+}
+
+.idea-column h2,
+.log-column h2 {
+    font-weight: 400;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.log-viewer {
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    height: 600px;
+    overflow-y: scroll;
+    padding: 1rem;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+
+.log-viewer div {
+    padding-bottom: 2px;
+}
+
+.idea-card {
+    background-color: var(--surface-color);
+    padding: 1.5rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 1.5rem;
+    opacity: 1;
+    transition: opacity 0.5s ease-out;
+}
+
+.idea-card h3 {
+    margin-top: 0;
+}
+
+.idea-card p {
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.description-box {
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+}
+
+.idea-card a {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+.idea-card a:hover {
+    text-decoration: underline;
+}
+
+.idea-status {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+}
+
+.idea-status span {
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+#loading-message {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 3rem;
+}
+
+/* --- Styles for Enhanced Idea Card --- */
+
+.idea-card h4 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    font-weight: 400;
+    color: var(--text-color);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+}
+
+.analysis-box {
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.swot-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.swot-item {
+    background-color: #2a2a2a;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.swot-item h5 {
+    margin-top: 0;
+    margin-bottom: 0.75rem;
+    color: var(--primary-color);
+    font-weight: 500;
+}
+
+.swot-list {
+    padding-left: 1em;
+    margin: 0;
+    list-style-type: none;
+    color: var(--text-secondary);
+}
+
+.swot-list li {
+    position: relative;
+    padding-left: 1.2em;
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+}
+
+.swot-list li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--primary-color);
+    font-weight: bold;
+}
+
+.ceo-action-panel {
+    border-top: 2px solid var(--border-color);
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+}
+
+.ceo-action-panel h4 {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 1rem;
+}
+
+.feedback-textarea {
+    width: 100%;
+    min-height: 80px;
+    background-color: #000;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.75rem;
+    color: var(--text-color);
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+    margin-bottom: 1rem;
+    box-sizing: border-box;
+}
+
+.feedback-textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.action-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+}
+
+.btn {
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    color: #000;
+}
+
+.approve-btn {
+    background-color: var(--status-ok);
+}
+
+.approve-btn:hover {
+    background-color: #00c853;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 230, 118, 0.2);
+}
+
+.reject-btn {
+    background-color: var(--status-error);
+}
+
+.reject-btn:hover {
+    background-color: #ff1744;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(255, 82, 82, 0.2);
+
+================================================================================
+
+--- File: backend/app/templates/index.html ---
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VVS - App Factory Control</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Veiled Vector Space // App Factory Control</h1>
+        </header>
+
+        <div class="status-panel">
+            <h2>System Status</h2>
+            <div id="api-status" class="status-item">API: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <div id="db-status" class="status-item">Database: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <div id="redis-status" class="status-item">Task Queue: <span class="status-light grey"></span> <span
+                    class="status-text">Checking...</span></div>
+            <button id="start-cycle-btn">FORCE NEW DISCOVERY CYCLE</button>
+        </div>
+
+        <div class="progress-panel">
+            <h2>Discovery Progress</h2>
+            <div class="progress-bar-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <span id="progress-text">Idle</span>
+        </div>
+
+        <div class="main-content">
+            <div class="idea-column">
+                <h2>Idea Review Queue</h2>
+                <!-- This div will be populated by main.js. The card below is a template. -->
+                <div id="idea-queue">
+                    <!--
+                        This is a structural template for a single idea card.
+                        The main.js script will use this structure to generate cards dynamically.
+                    -->
+                    <div class="idea-card" id="idea-template-placeholder">
+                        <h3>AI-Generated Title Will Appear Here</h3>
+                        <div class="idea-status">Status: <span>PENDING_CEO_APPROVAL</span></div>
+
+                        <p class="source-info"><strong>Source:</strong> <a href="#" target="_blank"
+                                rel="noopener noreferrer">Source Name</a></p>
+
+                        <h4>AI-Generated Summary</h4>
+                        <div class="description-box">
+                            The AI-generated summary of the core problem and solution will be displayed in this section.
+                        </div>
+
+                        <h4>Competition Analysis</h4>
+                        <div class="analysis-box">
+                            The CPO's analysis of the competitive landscape will be displayed here.
+                        </div>
+
+                        <h4>SWOT Analysis</h4>
+                        <div class="swot-grid">
+                            <div class="swot-item strengths">
+                                <h5>Strengths</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item weaknesses">
+                                <h5>Weaknesses</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item opportunities">
+                                <h5>Opportunities</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                            <div class="swot-item threats">
+                                <h5>Threats</h5>
+                                <ul class="swot-list"></ul>
+                            </div>
+                        </div>
+
+                        <div class="ceo-action-panel">
+                            <h4>CEO Review & Action</h4>
+                            <textarea class="feedback-textarea"
+                                placeholder="Provide feedback for rejection or revision..."></textarea>
+                            <div class="action-buttons">
+                                <button class="btn reject-btn">Reject</button>
+                                <button class="btn approve-btn">Approve for Dev</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="log-column">
+                <h2>Live Task Log</h2>
+                <div id="log-viewer" class="log-viewer"></div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+
+</html>
+
+================================================================================
+
+--- File: .terraform/providers/registry.terraform.io/hashicorp/google/6.42.0/linux_amd64/LICENSE.txt ---
+
+Copyright (c) 2017 HashiCorp, Inc.
+
+Mozilla Public License Version 2.0
+==================================
+
+1. Definitions
+--------------
+
+1.1. "Contributor"
+    means each individual or legal entity that creates, contributes to
+    the creation of, or owns Covered Software.
+
+1.2. "Contributor Version"
+    means the combination of the Contributions of others (if any) used
+    by a Contributor and that particular Contributor's Contribution.
+
+1.3. "Contribution"
+    means Covered Software of a particular Contributor.
+
+1.4. "Covered Software"
+    means Source Code Form to which the initial Contributor has attached
+    the notice in Exhibit A, the Executable Form of such Source Code
+    Form, and Modifications of such Source Code Form, in each case
+    including portions thereof.
+
+1.5. "Incompatible With Secondary Licenses"
+    means
+
+    (a) that the initial Contributor has attached the notice described
+        in Exhibit B to the Covered Software; or
+
+    (b) that the Covered Software was made available under the terms of
+        version 1.1 or earlier of the License, but not also under the
+        terms of a Secondary License.
+
+1.6. "Executable Form"
+    means any form of the work other than Source Code Form.
+
+1.7. "Larger Work"
+    means a work that combines Covered Software with other material, in
+    a separate file or files, that is not Covered Software.
+
+1.8. "License"
+    means this document.
+
+1.9. "Licensable"
+    means having the right to grant, to the maximum extent possible,
+    whether at the time of the initial grant or subsequently, any and
+    all of the rights conveyed by this License.
+
+1.10. "Modifications"
+    means any of the following:
+
+    (a) any file in Source Code Form that results from an addition to,
+        deletion from, or modification of the contents of Covered
+        Software; or
+
+    (b) any new file in Source Code Form that contains any Covered
+        Software.
+
+1.11. "Patent Claims" of a Contributor
+    means any patent claim(s), including without limitation, method,
+    process, and apparatus claims, in any patent Licensable by such
+    Contributor that would be infringed, but for the grant of the
+    License, by the making, using, selling, offering for sale, having
+    made, import, or transfer of either its Contributions or its
+    Contributor Version.
+
+1.12. "Secondary License"
+    means either the GNU General Public License, Version 2.0, the GNU
+    Lesser General Public License, Version 2.1, the GNU Affero General
+    Public License, Version 3.0, or any later versions of those
+    licenses.
+
+1.13. "Source Code Form"
+    means the form of the work preferred for making modifications.
+
+1.14. "You" (or "Your")
+    means an individual or a legal entity exercising rights under this
+    License. For legal entities, "You" includes any entity that
+    controls, is controlled by, or is under common control with You. For
+    purposes of this definition, "control" means (a) the power, direct
+    or indirect, to cause the direction or management of such entity,
+    whether by contract or otherwise, or (b) ownership of more than
+    fifty percent (50%) of the outstanding shares or beneficial
+    ownership of such entity.
+
+2. License Grants and Conditions
+--------------------------------
+
+2.1. Grants
+
+Each Contributor hereby grants You a world-wide, royalty-free,
+non-exclusive license:
+
+(a) under intellectual property rights (other than patent or trademark)
+    Licensable by such Contributor to use, reproduce, make available,
+    modify, display, perform, distribute, and otherwise exploit its
+    Contributions, either on an unmodified basis, with Modifications, or
+    as part of a Larger Work; and
+
+(b) under Patent Claims of such Contributor to make, use, sell, offer
+    for sale, have made, import, and otherwise transfer either its
+    Contributions or its Contributor Version.
+
+2.2. Effective Date
+
+The licenses granted in Section 2.1 with respect to any Contribution
+become effective for each Contribution on the date the Contributor first
+distributes such Contribution.
+
+2.3. Limitations on Grant Scope
+
+The licenses granted in this Section 2 are the only rights granted under
+this License. No additional rights or licenses will be implied from the
+distribution or licensing of Covered Software under this License.
+Notwithstanding Section 2.1(b) above, no patent license is granted by a
+Contributor:
+
+(a) for any code that a Contributor has removed from Covered Software;
+    or
+
+(b) for infringements caused by: (i) Your and any other third party's
+    modifications of Covered Software, or (ii) the combination of its
+    Contributions with other software (except as part of its Contributor
+    Version); or
+
+(c) under Patent Claims infringed by Covered Software in the absence of
+    its Contributions.
+
+This License does not grant any rights in the trademarks, service marks,
+or logos of any Contributor (except as may be necessary to comply with
+the notice requirements in Section 3.4).
+
+2.4. Subsequent Licenses
+
+No Contributor makes additional grants as a result of Your choice to
+distribute the Covered Software under a subsequent version of this
+License (see Section 10.2) or under the terms of a Secondary License (if
+permitted under the terms of Section 3.3).
+
+2.5. Representation
+
+Each Contributor represents that the Contributor believes its
+Contributions are its original creation(s) or it has sufficient rights
+to grant the rights to its Contributions conveyed by this License.
+
+2.6. Fair Use
+
+This License is not intended to limit any rights You have under
+applicable copyright doctrines of fair use, fair dealing, or other
+equivalents.
+
+2.7. Conditions
+
+Sections 3.1, 3.2, 3.3, and 3.4 are conditions of the licenses granted
+in Section 2.1.
+
+3. Responsibilities
+-------------------
+
+3.1. Distribution of Source Form
+
+All distribution of Covered Software in Source Code Form, including any
+Modifications that You create or to which You contribute, must be under
+the terms of this License. You must inform recipients that the Source
+Code Form of the Covered Software is governed by the terms of this
+License, and how they can obtain a copy of this License. You may not
+attempt to alter or restrict the recipients' rights in the Source Code
+Form.
+
+3.2. Distribution of Executable Form
+
+If You distribute Covered Software in Executable Form then:
+
+(a) such Covered Software must also be made available in Source Code
+    Form, as described in Section 3.1, and You must inform recipients of
+    the Executable Form how they can obtain a copy of such Source Code
+    Form by reasonable means in a timely manner, at a charge no more
+    than the cost of distribution to the recipient; and
+
+(b) You may distribute such Executable Form under the terms of this
+    License, or sublicense it under different terms, provided that the
+    license for the Executable Form does not attempt to limit or alter
+    the recipients' rights in the Source Code Form under this License.
+
+3.3. Distribution of a Larger Work
+
+You may create and distribute a Larger Work under terms of Your choice,
+provided that You also comply with the requirements of this License for
+the Covered Software. If the Larger Work is a combination of Covered
+Software with a work governed by one or more Secondary Licenses, and the
+Covered Software is not Incompatible With Secondary Licenses, this
+License permits You to additionally distribute such Covered Software
+under the terms of such Secondary License(s), so that the recipient of
+the Larger Work may, at their option, further distribute the Covered
+Software under the terms of either this License or such Secondary
+License(s).
+
+3.4. Notices
+
+You may not remove or alter the substance of any license notices
+(including copyright notices, patent notices, disclaimers of warranty,
+or limitations of liability) contained within the Source Code Form of
+the Covered Software, except that You may alter any license notices to
+the extent required to remedy known factual inaccuracies.
+
+3.5. Application of Additional Terms
+
+You may choose to offer, and to charge a fee for, warranty, support,
+indemnity or liability obligations to one or more recipients of Covered
+Software. However, You may do so only on Your own behalf, and not on
+behalf of any Contributor. You must make it absolutely clear that any
+such warranty, support, indemnity, or liability obligation is offered by
+You alone, and You hereby agree to indemnify every Contributor for any
+liability incurred by such Contributor as a result of warranty, support,
+indemnity or liability terms You offer. You may include additional
+disclaimers of warranty and limitations of liability specific to any
+jurisdiction.
+
+4. Inability to Comply Due to Statute or Regulation
+---------------------------------------------------
+
+If it is impossible for You to comply with any of the terms of this
+License with respect to some or all of the Covered Software due to
+statute, judicial order, or regulation then You must: (a) comply with
+the terms of this License to the maximum extent possible; and (b)
+describe the limitations and the code they affect. Such description must
+be placed in a text file included with all distributions of the Covered
+Software under this License. Except to the extent prohibited by statute
+or regulation, such description must be sufficiently detailed for a
+recipient of ordinary skill to be able to understand it.
+
+5. Termination
+--------------
+
+5.1. The rights granted under this License will terminate automatically
+if You fail to comply with any of its terms. However, if You become
+compliant, then the rights granted under this License from a particular
+Contributor are reinstated (a) provisionally, unless and until such
+Contributor explicitly and finally terminates Your grants, and (b) on an
+ongoing basis, if such Contributor fails to notify You of the
+non-compliance by some reasonable means prior to 60 days after You have
+come back into compliance. Moreover, Your grants from a particular
+Contributor are reinstated on an ongoing basis if such Contributor
+notifies You of the non-compliance by some reasonable means, this is the
+first time You have received notice of non-compliance with this License
+from such Contributor, and You become compliant prior to 30 days after
+Your receipt of the notice.
+
+5.2. If You initiate litigation against any entity by asserting a patent
+infringement claim (excluding declaratory judgment actions,
+counter-claims, and cross-claims) alleging that a Contributor Version
+directly or indirectly infringes any patent, then the rights granted to
+You by any and all Contributors for the Covered Software under Section
+2.1 of this License shall terminate.
+
+5.3. In the event of termination under Sections 5.1 or 5.2 above, all
+end user license agreements (excluding distributors and resellers) which
+have been validly granted by You or Your distributors under this License
+prior to termination shall survive termination.
+
+************************************************************************
+*                                                                      *
+*  6. Disclaimer of Warranty                                           *
+*  -------------------------                                           *
+*                                                                      *
+*  Covered Software is provided under this License on an "as is"       *
+*  basis, without warranty of any kind, either expressed, implied, or  *
+*  statutory, including, without limitation, warranties that the       *
+*  Covered Software is free of defects, merchantable, fit for a        *
+*  particular purpose or non-infringing. The entire risk as to the     *
+*  quality and performance of the Covered Software is with You.        *
+*  Should any Covered Software prove defective in any respect, You     *
+*  (not any Contributor) assume the cost of any necessary servicing,   *
+*  repair, or correction. This disclaimer of warranty constitutes an   *
+*  essential part of this License. No use of any Covered Software is   *
+*  authorized under this License except under this disclaimer.         *
+*                                                                      *
+************************************************************************
+
+************************************************************************
+*                                                                      *
+*  7. Limitation of Liability                                          *
+*  --------------------------                                          *
+*                                                                      *
+*  Under no circumstances and under no legal theory, whether tort      *
+*  (including negligence), contract, or otherwise, shall any           *
+*  Contributor, or anyone who distributes Covered Software as          *
+*  permitted above, be liable to You for any direct, indirect,         *
+*  special, incidental, or consequential damages of any character      *
+*  including, without limitation, damages for lost profits, loss of    *
+*  goodwill, work stoppage, computer failure or malfunction, or any    *
+*  and all other commercial damages or losses, even if such party      *
+*  shall have been informed of the possibility of such damages. This   *
+*  limitation of liability shall not apply to liability for death or   *
+*  personal injury resulting from such party's negligence to the       *
+*  extent applicable law prohibits such limitation. Some               *
+*  jurisdictions do not allow the exclusion or limitation of           *
+*  incidental or consequential damages, so this exclusion and          *
+*  limitation may not apply to You.                                    *
+*                                                                      *
+************************************************************************
+
+8. Litigation
+-------------
+
+Any litigation relating to this License may be brought only in the
+courts of a jurisdiction where the defendant maintains its principal
+place of business and such litigation shall be governed by laws of that
+jurisdiction, without reference to its conflict-of-law provisions.
+Nothing in this Section shall prevent a party's ability to bring
+cross-claims or counter-claims.
+
+9. Miscellaneous
+----------------
+
+This License represents the complete agreement concerning the subject
+matter hereof. If any provision of this License is held to be
+unenforceable, such provision shall be reformed only to the extent
+necessary to make it enforceable. Any law or regulation which provides
+that the language of a contract shall be construed against the drafter
+shall not be used to construe this License against a Contributor.
+
+10. Versions of the License
+---------------------------
+
+10.1. New Versions
+
+Mozilla Foundation is the license steward. Except as provided in Section
+10.3, no one other than the license steward has the right to modify or
+publish new versions of this License. Each version will be given a
+distinguishing version number.
+
+10.2. Effect of New Versions
+
+You may distribute the Covered Software under the terms of the version
+of the License under which You originally received the Covered Software,
+or under the terms of any subsequent version published by the license
+steward.
+
+10.3. Modified Versions
+
+If you create software not governed by this License, and you want to
+create a new license for such software, you may create and use a
+modified version of this License if you rename the license and remove
+any references to the name of the license steward (except to note that
+such modified license differs from this License).
+
+10.4. Distributing Source Code Form that is Incompatible With Secondary
+Licenses
+
+If You choose to distribute Source Code Form that is Incompatible With
+Secondary Licenses under the terms of this version of the License, the
+notice described in Exhibit B of this License must be attached.
+
+Exhibit A - Source Code Form License Notice
+-------------------------------------------
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+If it is not possible or desirable to put the notice in a particular
+file, then You may include the notice in a location (such as a LICENSE
+file in a relevant directory) where a recipient would be likely to look
+for such a notice.
+
+You may add additional accurate notices of copyright ownership.
+
+Exhibit B - "Incompatible With Secondary Licenses" Notice
+---------------------------------------------------------
+
+  This Source Code Form is "Incompatible With Secondary Licenses", as
+  defined by the Mozilla Public License, v. 2.0.
+
+
+================================================================================
+

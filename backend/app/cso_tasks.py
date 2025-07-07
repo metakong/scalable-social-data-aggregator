@@ -42,7 +42,7 @@ def cso_vetting_task(idea_id: int) -> str:
         else:
             socketio.emit('log_message', {'data': f'[CSO] High competition found for Idea {idea.id}. Rejecting.'})
             logger.info(f"Idea {idea.id} rejected due to high competition.")
-            idea.status = IdeaStatus.REJECTED_BY_CEO  # Consistent rejection status
+            idea.status = IdeaStatus.REJECTED_BY_CSO  # Consistent rejection status
             db.session.commit()
             return f"Idea {idea.id} rejected due to high market competition."
 
