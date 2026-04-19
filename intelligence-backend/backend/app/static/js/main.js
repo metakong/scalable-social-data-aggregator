@@ -57,21 +57,63 @@ document.addEventListener('DOMContentLoaded', () => {
         const h3 = document.createElement('h3');
         h3.textContent = idea.ai_title || 'Analysis In Progress...';
 
+        // Summary Section
         const pSummaryLabel = document.createElement('p');
-        const strongSummary = document.createElement('strong');
-        strongSummary.textContent = 'AI-Generated Summary:';
-        pSummaryLabel.appendChild(strongSummary);
-
+        pSummaryLabel.innerHTML = '<strong>AI-Generated Summary:</strong>';
         const descBox = document.createElement('div');
         descBox.className = 'description-box';
         descBox.textContent = idea.ai_summary || 'AI-generated summary will appear here.';
 
+        // Competition Analysis Section
+        const pCompLabel = document.createElement('p');
+        pCompLabel.innerHTML = '<strong>Competition Analysis:</strong>';
+        const compBox = document.createElement('div');
+        compBox.className = 'competition-box';
+        compBox.textContent = idea.competition_analysis || 'Competition analysis pending...';
+
+        // SWOT Analysis Section
+        const pSwotLabel = document.createElement('p');
+        pSwotLabel.innerHTML = '<strong>SWOT Analysis:</strong>';
+        const swotGrid = document.createElement('div');
+        swotGrid.className = 'swot-grid';
+
+        if (idea.swot_analysis && Object.keys(idea.swot_analysis).length > 0) {
+            const categories = ['strengths', 'weaknesses', 'opportunities', 'threats'];
+            categories.forEach(cat => {
+                const section = document.createElement('div');
+                section.className = 'swot-section';
+                
+                const h4 = document.createElement('h4');
+                h4.textContent = cat;
+                
+                const ul = document.createElement('ul');
+                const items = idea.swot_analysis[cat] || [];
+                
+                if (items.length > 0) {
+                    items.forEach(item => {
+                        const li = document.createElement('li');
+                        li.textContent = item;
+                        ul.appendChild(li);
+                    });
+                } else {
+                    const li = document.createElement('li');
+                    li.textContent = 'None identified.';
+                    ul.appendChild(li);
+                }
+                
+                section.appendChild(h4);
+                section.appendChild(ul);
+                swotGrid.appendChild(section);
+            });
+        } else {
+            swotGrid.className = 'pending-text';
+            swotGrid.textContent = 'SWOT analysis pending...';
+        }
+
+        // Source Section
         const pSource = document.createElement('p');
         pSource.className = 'source-info';
-        const strongSource = document.createElement('strong');
-        strongSource.textContent = 'Source: ';
-        pSource.appendChild(strongSource);
-
+        pSource.innerHTML = '<strong>Source: </strong>';
         const aSource = document.createElement('a');
         if (idea.source_url && idea.source_url.startsWith('devvit://')) {
             aSource.href = idea.source_url;
@@ -81,16 +123,19 @@ document.addEventListener('DOMContentLoaded', () => {
         aSource.textContent = idea.source_name;
         pSource.appendChild(aSource);
 
+        // Status Section
         const divStatus = document.createElement('div');
         divStatus.className = 'idea-status';
-        divStatus.textContent = 'Status: ';
-        const spanStatus = document.createElement('span');
-        spanStatus.textContent = idea.status;
-        divStatus.appendChild(spanStatus);
+        divStatus.innerHTML = `Status: <span>${idea.status}</span>`;
 
+        // Append all elements to the card
         card.appendChild(h3);
         card.appendChild(pSummaryLabel);
         card.appendChild(descBox);
+        card.appendChild(pCompLabel);
+        card.appendChild(compBox);
+        card.appendChild(pSwotLabel);
+        card.appendChild(swotGrid);
         card.appendChild(pSource);
         card.appendChild(divStatus);
 
