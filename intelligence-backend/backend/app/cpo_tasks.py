@@ -16,63 +16,77 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Devvit Webhook Processor (entry-point task)
+# Devvit Webhook Batch Processor (entry-point task)
 # ---------------------------------------------------------------------------
 @celery_app.task(
-    name='tasks.process_devvit_webhook',
-    rate_limit='30/m',
+    name='tasks.process_devvit_webhook_batch',
+    rate_limit='10/m',
     autoretry_for=(google_exceptions.ResourceExhausted, google_exceptions.ServiceUnavailable),
     retry_backoff=True,
     retry_jitter=True,
     max_retries=5,
 )
-def process_devvit_webhook(payload: dict[str, Any]) -> int:
+def process_devvit_webhook_batch(batch: list[dict[str, Any]]) -> list[int]:
     """
-    Receives a raw Reddit post payload from the Devvit sensor via the
-    webhook endpoint.  Runs Gemini SWOT + sentiment analysis, persists the
-    derived intelligence (NOT the raw text), and pushes a Socket.IO event
-    to the live dashboard.
+    Processes a batched array of Reddit post payloads from the Devvit
+    scheduler webhook.  Each item is analysed individually via Gemini,
+    persisted as derived intelligence, and pushed to the live dashboard.
 
-    Expected payload keys: title, body, subreddit.
+    Raw Reddit text is NEVER stored in the database.
     """
-    title = payload.get('title', '')
-    body = payload.get('body', '')
-    subreddit = payload.get('subreddit', 'unknown')
-
-    # Combine title + body as the analysis input
-    analysis_text = f"{title}\n\n{body}".strip()
-    if not analysis_text:
-        logger.warning("Empty payload received from r/%s — skipping.", subreddit)
-        return -1
+    created_ids: list[int] = []
 
     socketio.emit('log_message', {
-        'data': f'[WEBHOOK] Processing post from r/{subreddit}: "{title[:60]}…"'
+        'data': f'[WEBHOOK] Processing batch of {len(batch)} posts…'
     })
 
-    # ---- Gemini Analysis ----
-    analysis_data = _run_gemini_analysis(analysis_text, subreddit)
+    for idx, payload in enumerate(batch):
+        title = payload.get('title', '')
+        body = payload.get('body', '')
+        subreddit = payload.get('subreddit', 'unknown')
 
-    # ---- Persist derived intelligence (raw text is NOT stored) ----
-    idea = AppIdea(
-        source_url=f"devvit://r/{subreddit}/{hash(analysis_text) & 0xFFFFFFFF:08x}",
-        source_name=f"r/{subreddit}",
-        # raw_text intentionally left NULL — we do not store raw Reddit text
-        ai_generated_title=analysis_data.get("ai_generated_title"),
-        ai_generated_summary=analysis_data.get("ai_generated_summary"),
-        competition_analysis=analysis_data.get("competition_analysis"),
-        swot_analysis=_build_swot_blob(analysis_data),
-        status=IdeaStatus.PENDING_CEO_APPROVAL,
-    )
+        analysis_text = f"{title}\n\n{body}".strip()
+        if not analysis_text:
+            logger.warning("Empty payload at batch index %d from r/%s — skipping.", idx, subreddit)
+            continue
 
-    db.session.add(idea)
-    db.session.commit()
+        socketio.emit('log_message', {
+            'data': f'[WEBHOOK] [{idx + 1}/{len(batch)}] Analysing post from r/{subreddit}: "{title[:60]}…"'
+        })
+
+        try:
+            # ---- Gemini Analysis ----
+            analysis_data = _run_gemini_analysis(analysis_text, subreddit)
+
+            # ---- Persist derived intelligence (raw text is NOT stored) ----
+            idea = AppIdea(
+                source_url=f"devvit://r/{subreddit}/{hash(analysis_text) & 0xFFFFFFFF:08x}",
+                source_name=f"r/{subreddit}",
+                # raw_text intentionally left NULL
+                ai_generated_title=analysis_data.get("ai_generated_title"),
+                ai_generated_summary=analysis_data.get("ai_generated_summary"),
+                competition_analysis=analysis_data.get("competition_analysis"),
+                swot_analysis=_build_swot_blob(analysis_data),
+                status=IdeaStatus.PENDING_CEO_APPROVAL,
+            )
+            db.session.add(idea)
+            db.session.commit()
+
+            socketio.emit('idea_update', {'idea': idea.to_dict()})
+            created_ids.append(idea.id)
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error("Failed to process batch item %d from r/%s: %s", idx, subreddit, e)
+            socketio.emit('log_message', {
+                'data': f'[WEBHOOK] Failed to process item {idx + 1}: {e}'
+            })
 
     socketio.emit('log_message', {
-        'data': f'[WEBHOOK] Intelligence saved as Idea {idea.id}. Ready for CEO review.'
+        'data': f'[WEBHOOK] Batch complete. {len(created_ids)}/{len(batch)} ideas created.'
     })
-    socketio.emit('idea_update', {'idea': idea.to_dict()})
 
-    return idea.id
+    return created_ids
 
 
 # ---------------------------------------------------------------------------

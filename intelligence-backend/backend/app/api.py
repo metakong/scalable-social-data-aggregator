@@ -14,39 +14,61 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Devvit Webhook Receiver
+# Devvit Webhook Receiver (batched)
 # ---------------------------------------------------------------------------
 @api_bp.route('/webhooks/devvit', methods=['POST'])
 def devvit_webhook() -> tuple[Response, int]:
     """
-    Receives real-time post data from the Devvit sensor app.
-    Returns 202 immediately to prevent Devvit fetch() timeout drops,
-    then dispatches the payload asynchronously to a Celery worker.
+    Receives batched post data from the Devvit scheduler app.
+
+    Accepts a JSON array of post objects, each containing:
+      - title (str)
+      - body (str)
+      - subreddit (str)
+
+    Returns 202 Accepted immediately, then dispatches the entire
+    batch to a Celery worker for asynchronous Gemini analysis.
     """
-    payload: dict | None = request.get_json(silent=True)
+    payload: list | dict | None = request.get_json(silent=True)
 
-    if not isinstance(payload, dict):
-        return jsonify({"error": "Invalid or missing JSON payload."}), 400
+    # Accept both a JSON array (batch) and a single object (wrapped into a list)
+    if isinstance(payload, dict):
+        payload = [payload]
 
-    required_fields = ('title', 'body', 'subreddit')
-    if not all(field in payload for field in required_fields):
+    if not isinstance(payload, list) or len(payload) == 0:
         return jsonify({
-            "error": f"Missing required fields. Expected: {', '.join(required_fields)}"
+            "error": "Invalid payload. Expected a non-empty JSON array of post objects."
         }), 400
 
-    # Fire-and-forget: dispatch to Celery for async processing
+    # Validate every item in the batch
+    required_fields = ('title', 'body', 'subreddit')
+    for idx, item in enumerate(payload):
+        if not isinstance(item, dict):
+            return jsonify({
+                "error": f"Item at index {idx} is not a JSON object."
+            }), 400
+        missing = [f for f in required_fields if f not in item]
+        if missing:
+            return jsonify({
+                "error": f"Item at index {idx} missing required fields: {', '.join(missing)}"
+            }), 400
+
+    # Fire-and-forget: dispatch the full batch to Celery
     celery_app.send_task(
-        'tasks.process_devvit_webhook',
+        'tasks.process_devvit_webhook_batch',
         args=[payload],
     )
 
     logger.info(
-        "Devvit webhook accepted from r/%s: %s",
-        payload.get('subreddit', 'unknown'),
-        payload.get('title', '')[:80],
+        "Devvit webhook batch accepted: %d posts from r/%s",
+        len(payload),
+        payload[0].get('subreddit', 'unknown') if payload else 'unknown',
     )
 
-    return jsonify({"status": "accepted"}), 202
+    return jsonify({
+        "status": "accepted",
+        "batch_size": len(payload),
+    }), 202
 
 
 # ---------------------------------------------------------------------------

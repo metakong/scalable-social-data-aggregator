@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Demand Dashboard</title>
+  <style>
+    /* ------------------------------------------------------------------ */
+    /* Design System                                                      */
+    /* ------------------------------------------------------------------ */
+    :root {
+      --bg-primary: #0e1117;
+      --bg-card: #161b22;
+      --bg-row-hover: #1c2333;
+      --border-subtle: #30363d;
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --accent-gradient: linear-gradient(135deg, #58a6ff 0%, #bc8cff 100%);
+      --accent-blue: #58a6ff;
+      --accent-purple: #bc8cff;
+      --accent-green: #3fb950;
+      --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      padding: 20px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Header                                                             */
+    /* ------------------------------------------------------------------ */
+    .dashboard-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .dashboard-header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 6px;
+    }
+
+    .dashboard-header p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Leaderboard Table                                                   */
+    /* ------------------------------------------------------------------ */
+    .leaderboard {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    .leaderboard-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background-color 0.15s ease;
+    }
+
+    .leaderboard-row:last-child {
+      border-bottom: none;
+    }
+
+    .leaderboard-row:hover {
+      background-color: var(--bg-row-hover);
+    }
+
+    .rank {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.9rem;
+      flex-shrink: 0;
+      margin-right: 14px;
+    }
+
+    .rank-1 { background: linear-gradient(135deg, #ffd700 0%, #f0a500 100%); color: #1a1a1a; }
+    .rank-2 { background: linear-gradient(135deg, #c0c0c0 0%, #a0a0a0 100%); color: #1a1a1a; }
+    .rank-3 { background: linear-gradient(135deg, #cd7f32 0%, #a56729 100%); color: #fff; }
+    .rank-default { background: var(--border-subtle); color: var(--text-secondary); }
+
+    .category-name {
+      flex: 1;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .count-badge {
+      background: var(--accent-gradient);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.8rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+      min-width: 48px;
+      text-align: center;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Empty State                                                        */
+    /* ------------------------------------------------------------------ */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-secondary);
+    }
+
+    .empty-state .icon {
+      font-size: 2.5rem;
+      margin-bottom: 12px;
+    }
+
+    .empty-state p {
+      font-size: 0.9rem;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Disclaimer                                                         */
+    /* ------------------------------------------------------------------ */
+    .disclaimer {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+      font-style: italic;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Footer                                                             */
+    /* ------------------------------------------------------------------ */
+    .footer {
+      text-align: center;
+      padding-top: 8px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .footer a {
+      color: var(--accent-blue);
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    .footer a:hover {
+      color: var(--accent-purple);
+      text-decoration: underline;
+    }
+
+    .footer .separator {
+      margin: 0 8px;
+      color: var(--border-subtle);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Loading Spinner                                                    */
+    /* ------------------------------------------------------------------ */
+    .loading {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--text-secondary);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    .loading .dots span {
+      animation: pulse 1.4s infinite ease-in-out;
+      font-size: 1.5rem;
+      margin: 0 3px;
+    }
+
+    .loading .dots span:nth-child(2) { animation-delay: 0.2s; }
+    .loading .dots span:nth-child(3) { animation-delay: 0.4s; }
+  </style>
+</head>
+<body>
+
+  <div class="dashboard-header">
+    <h1>🔥 Top 5 App Requests of the Last 24 Hours</h1>
+    <p>Demand signals detected in this subreddit</p>
+  </div>
+
+  <div id="leaderboard-container">
+    <div class="loading">
+      <div class="dots">
+        <span>●</span><span>●</span><span>●</span>
+      </div>
+      <p style="margin-top: 12px;">Loading leaderboard…</p>
+    </div>
+  </div>
+
+  <div class="disclaimer">
+    Trending topics are aggregated by asynchronously analyzing post text via an external intelligence engine. No personal user data is stored.
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/metakong/scalable-social-data-aggregator/blob/main/PRIVACY_POLICY.md" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+    <span class="separator">•</span>
+    <a href="https://github.com/metakong/scalable-social-data-aggregator/blob/main/TERMS_OF_SERVICE.md" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+  </div>
+
+  <script>
+    /**
+     * Devvit Webview Client
+     *
+     * Communicates with the Devvit app runtime via postMessage to read
+     * the Redis leaderboard and render the top 5 demand categories.
+     */
+
+    const REPO_BASE = 'https://github.com/metakong/scalable-social-data-aggregator';
+
+    /**
+     * Request leaderboard data from the Devvit host.
+     */
+    function requestLeaderboard() {
+      window.parent.postMessage(
+        { type: 'devvit-message', data: { action: 'getLeaderboard' } },
+        '*'
+      );
+    }
+
+    /**
+     * Render the leaderboard rows into the DOM.
+     * @param {Array<{category: string, count: number}>} entries
+     */
+    function renderLeaderboard(entries) {
+      const container = document.getElementById('leaderboard-container');
+
+      if (!entries || entries.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="icon">📭</div>
+            <p>No demand signals detected in the last 24 hours.</p>
+            <p style="margin-top: 6px; font-size: 0.8rem;">The scheduler runs daily — check back tomorrow.</p>
+          </div>
+        `;
+        return;
+      }
+
+      // Take top 5
+      const top5 = entries.slice(0, 5);
+
+      const rankClass = (i) => {
+        if (i === 0) return 'rank rank-1';
+        if (i === 1) return 'rank rank-2';
+        if (i === 2) return 'rank rank-3';
+        return 'rank rank-default';
+      };
+
+      const rows = top5
+        .map(
+          (entry, i) => `
+        <div class="leaderboard-row">
+          <div class="${rankClass(i)}">${i + 1}</div>
+          <span class="category-name">${escapeHtml(entry.category)}</span>
+          <span class="count-badge">${entry.count}</span>
+        </div>
+      `
+        )
+        .join('');
+
+      container.innerHTML = `<div class="leaderboard">${rows}</div>`;
+    }
+
+    /**
+     * Escape HTML entities to prevent XSS.
+     */
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    /**
+     * Listen for messages from the Devvit host runtime.
+     */
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (!msg || msg.type !== 'devvit-message') return;
+
+      const payload = msg.data;
+      if (payload.action === 'leaderboardData') {
+        renderLeaderboard(payload.entries);
+      }
+    });
+
+    // Request data on load
+    requestLeaderboard();
+  </script>
+</body>
+</html>

@@ -1,90 +1,183 @@
 import { Devvit } from '@devvit/public-api';
 
 /**
- * Scalable Social — Devvit Sensor App
+ * Scalable Social — Devvit Scheduler Sensor
  *
- * Listens for new posts in the installed subreddit via the onPostSubmit
- * trigger.  When a post matches the demand-intent regex, the sensor fires
- * an HTTP POST webhook to the intelligence backend for async SWOT analysis.
+ * Runs a daily scheduled job that fetches the installed subreddit's posts
+ * from the last 24 hours, applies a demand-intent regex filter, increments
+ * Redis category counters, and dispatches matching posts as a batched
+ * webhook payload to the intelligence backend.
  */
 
-// The regex intent filter — captures posts expressing latent product demand
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Regex intent filter — captures posts expressing latent product demand. */
 const INTENT_PATTERN =
   /(somebody should make|is there an app|wish there was an app|app idea|we need a website|would pay for)/i;
 
-// Configure the Devvit app capabilities
+/** Redis key prefix for category counters. */
+const REDIS_COUNTER_PREFIX = 'demand_counter:';
+
+/** Redis key for the ordered leaderboard. */
+const REDIS_LEADERBOARD_KEY = 'demand_leaderboard';
+
+/** The production webhook endpoint. */
+const WEBHOOK_URL = 'https://webhook.legacysweatequity.com/api/webhooks/devvit';
+
+/** 24 hours in milliseconds. */
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
 Devvit.configure({
-  http: true, // required for outbound fetch()
+  http: true,
+  redis: true,
+  redditAPI: true,
 });
 
 // ---------------------------------------------------------------------------
-// onPostSubmit Trigger
+// Utility: classify a post title into a demand category
 // ---------------------------------------------------------------------------
-Devvit.addTrigger({
-  event: 'PostSubmit',
-  onEvent: async (event, context) => {
-    const post = event.post;
-    if (!post) return;
 
-    const title = post.title ?? '';
-    const body = post.body ?? '';
-    const subreddit = post.subreddit?.name ?? 'unknown';
+function classifyCategory(title: string): string {
+  const lower = title.toLowerCase();
+  if (lower.includes('app idea')) return 'App Ideas';
+  if (lower.includes('wish there was an app')) return 'Wished-For Apps';
+  if (lower.includes('somebody should make')) return 'Build Requests';
+  if (lower.includes('is there an app')) return 'App Discovery';
+  if (lower.includes('we need a website')) return 'Website Requests';
+  if (lower.includes('would pay for')) return 'Paid Demand';
+  return 'General Demand';
+}
 
-    // Run the intent filter against title + body
-    const combinedText = `${title} ${body}`;
-    if (!INTENT_PATTERN.test(combinedText)) {
-      console.log(
-        `[Sensor] Post in r/${subreddit} did not match intent filter. Skipping.`
-      );
-      return;
+// ---------------------------------------------------------------------------
+// Scheduler Job: Daily Demand Scan
+// ---------------------------------------------------------------------------
+
+Devvit.addSchedulerJob({
+  name: 'daily_demand_scan',
+  onRun: async (_event, context) => {
+    const { reddit, redis } = context;
+
+    console.log('[Scheduler] Starting daily demand scan…');
+
+    // Determine the installed subreddit
+    const subreddit = await reddit.getCurrentSubreddit();
+    const subredditName = subreddit.name;
+
+    console.log(`[Scheduler] Scanning r/${subredditName} for demand signals…`);
+
+    // Fetch recent posts (new, up to 100)
+    const posts = await reddit.getNewPosts({
+      subredditName,
+      limit: 100,
+    }).all();
+
+    // Filter to last 24 hours
+    const cutoff = new Date(Date.now() - TWENTY_FOUR_HOURS_MS);
+    const recentPosts = posts.filter((post) => {
+      const created = new Date(post.createdAt);
+      return created >= cutoff;
+    });
+
+    console.log(
+      `[Scheduler] Found ${recentPosts.length} posts from the last 24 hours.`
+    );
+
+    // Apply intent filter and build batch
+    const matchedBatch: Array<{ title: string; body: string; subreddit: string }> = [];
+
+    for (const post of recentPosts) {
+      const title = post.title ?? '';
+      const body = post.body ?? '';
+      const combinedText = `${title} ${body}`;
+
+      if (!INTENT_PATTERN.test(combinedText)) continue;
+
+      // Classify and increment Redis counter
+      const category = classifyCategory(title);
+      const counterKey = `${REDIS_COUNTER_PREFIX}${category}`;
+      const newCount = await redis.incrBy(counterKey, 1);
+
+      // Update the sorted leaderboard (score = count)
+      await redis.zAdd(REDIS_LEADERBOARD_KEY, {
+        member: category,
+        score: newCount,
+      });
+
+      matchedBatch.push({
+        title,
+        body,
+        subreddit: subredditName,
+      });
     }
 
     console.log(
-      `[Sensor] Demand signal detected in r/${subreddit}: "${title.slice(0, 80)}"`
+      `[Scheduler] ${matchedBatch.length} posts matched the intent filter.`
     );
 
-    // Build the webhook payload
-    const payload = {
-      title,
-      body,
-      subreddit,
-    };
+    if (matchedBatch.length === 0) {
+      console.log('[Scheduler] No demand signals found. Skipping webhook.');
+      return;
+    }
 
-    // POST to the intelligence backend webhook
-    // The WEBHOOK_URL should be set via `devvit settings` or as an install setting.
-    // Default to localhost for local development with ngrok.
-    const webhookUrl =
-      (await context.settings.get<string>('webhook_url')) ??
-      'http://localhost:8000/api/v1/webhooks/devvit';
-
+    // Dispatch batched payload to the intelligence backend
     try {
-      const response = await fetch(webhookUrl, {
+      const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(matchedBatch),
       });
 
       console.log(
-        `[Sensor] Webhook dispatched to ${webhookUrl} — status: ${response.status}`
+        `[Scheduler] Webhook dispatched — status: ${response.status}, batch size: ${matchedBatch.length}`
       );
     } catch (error) {
-      console.error(`[Sensor] Webhook delivery failed:`, error);
+      console.error('[Scheduler] Webhook delivery failed:', error);
     }
   },
 });
 
 // ---------------------------------------------------------------------------
-// Install Settings — allow the user to configure the webhook URL
+// Trigger: Schedule the job on app install
 // ---------------------------------------------------------------------------
-Devvit.addSettings([
-  {
-    type: 'string',
-    name: 'webhook_url',
-    label: 'Intelligence Backend Webhook URL',
-    helpText:
-      'The full URL of the Flask webhook endpoint (e.g. https://<ngrok-id>.ngrok.io/api/v1/webhooks/devvit)',
-    defaultValue: 'http://localhost:8000/api/v1/webhooks/devvit',
+
+Devvit.addTrigger({
+  event: 'AppInstall',
+  onEvent: async (_event, context) => {
+    const { scheduler } = context;
+
+    // Schedule the daily scan to run once every 24 hours
+    await scheduler.runJob({
+      name: 'daily_demand_scan',
+      cron: '0 6 * * *', // 6:00 AM UTC daily
+    });
+
+    console.log('[Install] Scheduled daily_demand_scan at 6:00 AM UTC.');
   },
-]);
+});
+
+// ---------------------------------------------------------------------------
+// Custom Post: Demand Dashboard (renders the React webview)
+// ---------------------------------------------------------------------------
+
+Devvit.addCustomPostType({
+  name: 'Demand Dashboard',
+  description: 'Top demand signals from the last 24 hours',
+  render: (context) => {
+    return (
+      <webview
+        id="demand-dashboard"
+        url="client/index.html"
+        width="100%"
+        height="480px"
+      />
+    );
+  },
+});
 
 export default Devvit;

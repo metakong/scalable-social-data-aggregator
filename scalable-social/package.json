@@ -13,5 +13,8 @@
   "devDependencies": {
     "@devvit/tsconfig": "latest",
     "typescript": "^5.0.0"
+  },
+  "devvit": {
+    "webRoot": "./src/client"
   }
 }
