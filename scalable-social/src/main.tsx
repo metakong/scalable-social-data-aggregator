@@ -175,6 +175,35 @@ Devvit.addCustomPostType({
         url="client/index.html"
         width="100%"
         height="480px"
+        onMessage={async (msg) => {
+          // Listen for the request from index.html
+          if (msg.action === 'getLeaderboard') {
+            try {
+              // Fetch the top 5 highest-scored categories from Redis
+              const results = await context.redis.zRange(REDIS_LEADERBOARD_KEY, 0, 4, {
+                by: 'score',
+                reverse: true,
+              });
+              
+              // Map Redis results into the format expected by the frontend
+              const formattedEntries = results.map(r => ({
+                category: r.member,
+                count: r.score
+              }));
+
+              // Send the data back down to the webview
+              context.ui.webView.postMessage('demand-dashboard', {
+                type: 'devvit-message',
+                data: {
+                  action: 'leaderboardData',
+                  entries: formattedEntries,
+                },
+              });
+            } catch (error) {
+              console.error('[Dashboard] Error fetching Redis leaderboard:', error);
+            }
+          }
+        }}
       />
     );
   },
