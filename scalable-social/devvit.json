@@ -1,7 +1,6 @@
 {
-  "name": "scalable-social-sensor",
-  "version": "0.1.0",
-  "slug": "scalable-social-sensor",
-  "description": "A Reddit sensor that aggregates demand signals into a webhook",
-  "author": "Open Source Community"
+  "name": "scalable-social",
+  "blocks": {
+    "entry": "src/main.tsx"
+  }
 }

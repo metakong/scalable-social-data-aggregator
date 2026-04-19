@@ -1,5 +1,4 @@
 import { Devvit } from '@devvit/public-api';
-
 /**
  * Scalable Social — Devvit Scheduler Sensor
  *
@@ -221,5 +220,34 @@ Devvit.addCustomPostType({
     );
   },
 });
+// ---------------------------------------------------------------------------
+// Menu Item: Allow moderators to spawn the Dashboard
+// ---------------------------------------------------------------------------
 
+Devvit.addMenuItem({
+  label: 'Create Demand Dashboard',
+  location: 'subreddit',
+  forUserType: 'moderator',
+  onPress: async (_event, context) => {
+    try {
+      const subreddit = await context.reddit.getCurrentSubreddit();
+      
+      // THE FIX: The Blocks API uses submitPost, not submitCustomPost
+      await context.reddit.submitPost({
+        title: 'Real-Time Demand Dashboard',
+        subredditName: subreddit.name,
+        preview: (
+          <vstack padding="medium" alignment="middle center">
+            <text size="large">Loading Demand Intelligence...</text>
+          </vstack>
+        ),
+      });
+
+      context.ui.showToast('Dashboard Created!');
+    } catch (e) {
+      console.error('Submit Error:', e);
+      context.ui.showToast('Error: Check terminal logs');
+    }
+  },
+});
 export default Devvit;
