@@ -24,7 +24,7 @@ class AppIdea(db.Model):
     source_name: Mapped[str] = mapped_column(String(100))
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[IdeaStatus] = mapped_column(
-        DBEnum(IdeaStatus, name="ideastatus", create_type=False),
+        DBEnum(IdeaStatus, name="ideastatus"),
         default=IdeaStatus.PENDING_CSO_VETTING,
         index=True
     )
@@ -36,6 +36,7 @@ class AppIdea(db.Model):
     ai_generated_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     competition_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     swot_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    competitor_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
@@ -58,5 +59,6 @@ class AppIdea(db.Model):
             "ai_summary": self.ai_generated_summary,
             "competition_analysis": self.competition_analysis,
             "swot_analysis": self.swot_analysis,
+            "competitor_data": self.competitor_data,
             "created_at": self.created_at.isoformat(),
         }

@@ -18,5 +18,4 @@ psycogreen
 google-generativeai
 google-api-python-client
 praw
-# The httpx dependency is required by the Mumsnet scraper
-httpx
+google-play-scraper

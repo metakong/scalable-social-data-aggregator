@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 import json
-import httpx
+import requests
 from celery_app import celery_app
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Error
 from .extensions import socketio, redis_client
@@ -9,7 +9,7 @@ from .extensions import socketio, redis_client
 API_URL = "http://web:8000/api/v1/ideas"
 SOURCE_NAME = "Mumsnet"
 TARGET_URL = "https://www.mumsnet.com/talk/am_i_being_unreasonable"
-STATE_FILE = "/tmp/mumsnet_state.json"
+STATE_FILE = "/home/app/web/sessions/mumsnet_state.json"
 PROGRESS_CURRENT_KEY = "discovery_progress_current"
 PROGRESS_TOTAL_KEY = "discovery_progress_total"
 
@@ -76,6 +76,7 @@ def scrape_mumsnet() -> str:
         r.set(PROGRESS_TOTAL_KEY, len(thread_elements))
         ideas_found = 0
 
+        session = requests.Session()
         for i, element in enumerate(thread_elements):
             r.set(PROGRESS_CURRENT_KEY, i + 1)
             socketio.emit('progress_update', {'current': i + 1, 'total': len(thread_elements)})
@@ -85,14 +86,13 @@ def scrape_mumsnet() -> str:
                 url = title_element.get_attribute('href')
                 full_url = f"https://www.mumsnet.com{url}" if not (url.startswith('http') or url.startswith('//')) else url
                 
-                with httpx.Client() as client:
-                    response = client.post(
-                        "http://web:8000/api/v1/ideas",
-                        json={"source_url": full_url, "source_name": SOURCE_NAME, "raw_text": title},
-                        timeout=10.0
-                    )
-                    if response.status_code == 201:
-                        ideas_found += 1
+                response = session.post(
+                    "http://web:8000/api/v1/ideas",
+                    json={"source_url": full_url, "source_name": SOURCE_NAME, "raw_text": title},
+                    timeout=10.0
+                )
+                if response.status_code == 201:
+                    ideas_found += 1
             except Exception as e:
                 socketio.emit('log_message', {'data': f'[Mumsnet ERROR] Could not process thread: {e}'})
         
