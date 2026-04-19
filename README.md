@@ -19,13 +19,13 @@ An open-source monorepo that pairs a [Reddit Devvit](https://developers.reddit.c
 │                          │                                          │
 │  TypeScript + React      │  backend/                                │
 │  webview dashboard       │    app/api.py        ← webhook receiver  │
-│                          │    app/cpo_tasks.py  ← Gemini analysis   │
+│                          │    app/analysis_tasks.py ← Gemini analysis   │
 │  Daily scheduler job     │    app/models.py     ← PostgreSQL ORM    │
 │  scans posts, filters    │  docker-compose.yml                      │
 │  by intent regex,        │  requirements.txt                        │
 │  batches matches into    │  .env.example                            │
 │  a single POST to:      │                                          │
-│  /api/webhooks/devvit    │                                          │
+│  /api/v1/webhooks/devvit │                                          │
 └──────────┬───────────────┴──────────────────┬───────────────────────┘
            │                                  │
            │   HTTPS POST (JSON batch array)  │
@@ -83,7 +83,11 @@ cp .env.example .env
 docker compose up --build -d
 
 # Verify services are healthy
-curl http://localhost:8000/api/status
+curl http://localhost:8000/api/v1/status
+
+# Generate initial database migration
+docker compose exec backend flask db migrate -m "initial"
+docker compose exec backend flask db upgrade
 ```
 
 ### 2. Expose the Backend via Static HTTPS Domain
@@ -155,7 +159,7 @@ scalable-social-data-aggregator/
 │   │   ├── app/
 │   │   │   ├── __init__.py         # Flask app factory
 │   │   │   ├── api.py              # Webhook receiver (batched)
-│   │   │   ├── cpo_tasks.py        # Celery tasks (batch + Gemini)
+│   │   │   ├── analysis_tasks.py   # Celery tasks (batch + Gemini)
 │   │   │   ├── extensions.py       # DB, Redis, Socket.IO instances
 │   │   │   ├── models.py           # SQLAlchemy ORM models
 │   │   │   ├── main.py             # Dashboard blueprint
@@ -206,7 +210,7 @@ scalable-social-data-aggregator/
 
 ## Webhook API Reference
 
-### `POST /api/webhooks/devvit`
+### `POST /api/v1/webhooks/devvit`
 
 Receives a batched array of demand-signal posts from the Devvit scheduler.
 

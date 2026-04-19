@@ -9,11 +9,9 @@ from .extensions import db
 
 class IdeaStatus(enum.Enum):
     PENDING_CSO_VETTING = "PENDING_CSO_VETTING"
-    PENDING_CPO_ANALYSIS = "PENDING_CPO_ANALYSIS"
-    PENDING_CEO_APPROVAL = "PENDING_CEO_APPROVAL"
-    REJECTED_BY_CEO = "REJECTED_BY_CEO"
+    PENDING_ANALYSIS = "PENDING_ANALYSIS"
+    ANALYSIS_COMPLETE = "ANALYSIS_COMPLETE"
     APPROVED_FOR_DEV = "APPROVED_FOR_DEV"
-    PENDING_CEO_TESTING = "PENDING_CEO_TESTING"
     PUBLISHED = "PUBLISHED"
 
 class AppIdea(db.Model):
@@ -22,13 +20,11 @@ class AppIdea(db.Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     source_url: Mapped[str] = mapped_column(Text, unique=True, index=True)
     source_name: Mapped[str] = mapped_column(String(100))
-    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[IdeaStatus] = mapped_column(
         DBEnum(IdeaStatus, name="ideastatus"),
-        default=IdeaStatus.PENDING_CSO_VETTING,
+        default=IdeaStatus.PENDING_ANALYSIS,
         index=True
     )
-    ceo_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     apk_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # AI-Generated Fields
@@ -36,7 +32,6 @@ class AppIdea(db.Model):
     ai_generated_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     competition_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     swot_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    competitor_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
@@ -59,6 +54,5 @@ class AppIdea(db.Model):
             "ai_summary": self.ai_generated_summary,
             "competition_analysis": self.competition_analysis,
             "swot_analysis": self.swot_analysis,
-            "competitor_data": self.competitor_data,
             "created_at": self.created_at.isoformat(),
         }

@@ -1,7 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
     const statusApiUrl = '/api/v1/status';
     const ideasApiUrl = '/api/v1/ideas';
-    const sourcingApiUrl = '/api/v1/sourcing/start';
 
     const apiStatusText = document.getElementById('api-status').querySelector('.status-text');
     const apiStatusLight = document.getElementById('api-status').querySelector('.status-light');
@@ -11,7 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const redisStatusLight = document.getElementById('redis-status').querySelector('.status-light');
 
     const ideaQueue = document.getElementById('idea-queue');
-    const startCycleBtn = document.getElementById('start-cycle-btn');
     const logViewer = document.getElementById('log-viewer');
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
@@ -84,30 +82,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function startDiscoveryCycle() {
-        startCycleBtn.disabled = true;
-        startCycleBtn.classList.add('loading');
-        logViewer.innerHTML = '';
-        addLogMessage('Requesting new discovery cycle...');
-        progressBar.style.width = '0%';
-        progressText.textContent = 'Initializing...';
-        try {
-            const response = await fetch(sourcingApiUrl, { method: 'POST' });
-            if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
-            const data = await response.json();
-            addLogMessage(`Cycle initiated successfully: ${data.message}`);
-        } catch (error) {
-            addLogMessage(`Error starting cycle: ${error.message}`);
-            startCycleBtn.disabled = false;
-            startCycleBtn.classList.remove('loading');
-        }
-    }
+
 
     const socket = io({ transports: ['websocket'] });
     socket.on('connect', () => addLogMessage('Real-time connection established.'));
     socket.on('disconnect', () => addLogMessage('Real-time connection lost.'));
     socket.on('log_message', (msg) => addLogMessage(msg.data));
-    socket.on('new_idea', (data) => {
+    socket.on('idea_update', (data) => {
         const loadingMessage = document.getElementById('loading-message') || document.getElementById('no-ideas');
         if (loadingMessage) loadingMessage.remove();
 
@@ -134,7 +115,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    startCycleBtn.addEventListener('click', startDiscoveryCycle);
 
     checkSystemStatus();
     setInterval(checkSystemStatus, 30000);

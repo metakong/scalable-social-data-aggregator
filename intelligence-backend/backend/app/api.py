@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import os
 from typing import Any
 from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import select, desc
@@ -29,6 +30,11 @@ def devvit_webhook() -> tuple[Response, int]:
     Returns 202 Accepted immediately, then dispatches the entire
     batch to a Celery worker for asynchronous Gemini analysis.
     """
+    auth_header = request.headers.get('Authorization')
+    expected_token = f"Bearer {os.getenv('DEVVIT_WEBHOOK_SECRET')}"
+    if auth_header != expected_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
     payload: list | dict | None = request.get_json(silent=True)
 
     # Accept both a JSON array (batch) and a single object (wrapped into a list)
@@ -38,6 +44,11 @@ def devvit_webhook() -> tuple[Response, int]:
     if not isinstance(payload, list) or len(payload) == 0:
         return jsonify({
             "error": "Invalid payload. Expected a non-empty JSON array of post objects."
+        }), 400
+
+    if len(payload) > 50:
+        return jsonify({
+            "error": "Batch size exceeds the maximum limit of 50 items."
         }), 400
 
     # Validate every item in the batch

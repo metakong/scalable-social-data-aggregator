@@ -18,7 +18,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
 
     # Import and register blueprints
     from .api import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
 
     from .main import main_bp
     app.register_blueprint(main_bp)

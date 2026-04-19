@@ -24,7 +24,7 @@ const REDIS_COUNTER_PREFIX = 'demand_counter:';
 const REDIS_LEADERBOARD_KEY = 'demand_leaderboard';
 
 /** The production webhook endpoint. */
-const WEBHOOK_URL = 'https://webhook.legacysweatequity.com/api/webhooks/devvit';
+const WEBHOOK_URL = 'https://webhook.legacysweatequity.com/api/v1/webhooks/devvit';
 
 /** 24 hours in milliseconds. */
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
@@ -129,7 +129,10 @@ Devvit.addSchedulerJob({
     try {
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer <YOUR_SECRET>'
+        },
         body: JSON.stringify(matchedBatch),
       });
 
@@ -177,11 +180,11 @@ Devvit.addCustomPostType({
         height="480px"
         onMessage={async (msg) => {
           // Listen for the request from index.html
-          if (msg.action === 'getLeaderboard') {
+          if (msg.data?.action === 'getLeaderboard') {
             try {
               // Fetch the top 5 highest-scored categories from Redis
               const results = await context.redis.zRange(REDIS_LEADERBOARD_KEY, 0, 4, {
-                by: 'score',
+                by: 'rank',
                 reverse: true,
               });
               

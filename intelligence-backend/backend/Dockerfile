@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 ENV VENV_PATH="/opt/venv"
 ENV PATH="${VENV_PATH}/bin:${PATH}"
+ENV FLASK_APP=wsgi:app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
