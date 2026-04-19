@@ -25,5 +25,10 @@ docker-compose.local.yml
 
 *.venv
 
+# Node / Devvit
+node_modules/
+dist/
+.devvit/
+
 # OS-specific files
 .DS_Store

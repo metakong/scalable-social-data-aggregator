@@ -1,0 +1,12 @@
+flask
+gunicorn
+flask-socketio
+SQLAlchemy
+Flask-SQLAlchemy
+Flask-Migrate
+psycopg2-binary
+celery
+redis
+requests
+python-dotenv
+google-generativeai

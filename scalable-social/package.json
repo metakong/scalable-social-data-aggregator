@@ -1,0 +1,17 @@
+{
+  "name": "scalable-social-sensor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "devvit playtest",
+    "upload": "devvit upload"
+  },
+  "dependencies": {
+    "@devvit/public-api": "latest"
+  },
+  "devDependencies": {
+    "@devvit/tsconfig": "latest",
+    "typescript": "^5.0.0"
+  }
+}
