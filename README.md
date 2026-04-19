@@ -1,258 +1,130 @@
 # Scalable Social Data Aggregator
 
-**Batch-scheduled Reddit demand intelligence, powered by webhook-driven serverless architecture.**
+**An asynchronous, webhook-driven data pipeline bridging serverless TypeScript applications with a Python/Flask intelligence backend.**
 
-An open-source monorepo that pairs a [Reddit Devvit](https://developers.reddit.com/) scheduler app with a Python/Flask intelligence backend. The Devvit app runs a daily scheduled job to scan subreddit posts for demand-intent signals, batches the matches, and fires a single webhook to the backend — which runs Gemini-powered SWOT and sentiment analysis and streams results to a live dashboard.
+This monorepo is designed as an open-source proof-of-work demonstrating end-to-end orchestration of serverless event triggers, secure REST APIs, asynchronous task queues, and Generative AI inference. 
 
-> **Bring Your Own Subreddit** — install the sensor on _any_ subreddit you moderate and point it at your own backend instance.
+The architecture consists of a [Reddit Devvit](https://developers.reddit.com/) scheduled sensor that extracts community trend signals and securely transmits them to an isolated Python backend. The backend utilizes Google's Gemini 2.5 Flash Lite to process the text into an Open Source Research Summary without retaining raw user data.
 
 ---
 
-## Architecture
+## 🏗 Architecture Overview
 
-```
+The repository is divided into two distinct, decoupled environments:
+
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          MONOREPO ROOT                              │
 ├──────────────────────────┬──────────────────────────────────────────┤
 │  /scalable-social/       │  /intelligence-backend/                  │
-│  (Devvit Scheduler App)  │  (Python/Flask + Celery + PostgreSQL)    │
+│  (Devvit Sensor App)     │  (Python/Flask + Celery + PostgreSQL)    │
 │                          │                                          │
 │  TypeScript + React      │  backend/                                │
-│  webview dashboard       │    app/api.py        ← webhook receiver  │
-│                          │    app/analysis_tasks.py ← Gemini analysis   │
+│  webview dashboard       │    app/api.py        ← HMAC Webhook Auth │
+│                          │    app/analysis_tasks.py ← Gemini 2.5    │
 │  Daily scheduler job     │    app/models.py     ← PostgreSQL ORM    │
 │  scans posts, filters    │  docker-compose.yml                      │
-│  by intent regex,        │  requirements.txt                        │
-│  batches matches into    │  .env.example                            │
-│  a single POST to:      │                                          │
-│  /api/v1/webhooks/devvit │                                          │
-└──────────┬───────────────┴──────────────────┬───────────────────────┘
-           │                                  │
-           │   HTTPS POST (JSON batch array)  │
-           └─────────────────────────────────►│
-                                              │
-                             ┌────────────────▼──────────────┐
-                             │  Flask API (port 8000)         │
-                             │  Returns 202 Accepted          │
-                             │  Dispatches batch to Celery    │
-                             └────────────────┬──────────────┘
-                                              │
-                             ┌────────────────▼──────────────┐
-                             │  Celery Worker                 │
-                             │  Iterates batch items          │
-                             │  Gemini 1.5 Flash SWOT (each)  │
-                             │  Save to PostgreSQL            │
-                             │  Emit Socket.IO events         │
-                             └───────────────────────────────┘
-```
+│  by intent regex,        │                                          │
+│  updates Redis metrics,  │  4-Container Stack:                      │
+│  and fires HTTP webhook. │  Flask API, Celery Worker, Redis, DB     │
+└──────────────────────────┴──────────────────────────────────────────┘
 
-### Data Flow
+### **The Webhook Lifecycle (Data Flow)**
 
-1. The **Devvit scheduler** (`/scalable-social/`) runs a `daily_demand_scan` job every 24 hours (6:00 AM UTC).
-2. The job fetches up to 100 recent posts from the installed subreddit via the Reddit API.
-3. Posts from the last 24 hours are filtered through a demand-intent regex.
-4. Matching posts increment **Redis category counters** for the in-app leaderboard.
-5. All matches are compiled into a **single JSON batch array** and dispatched via `fetch()` POST to the backend webhook.
-6. The **Flask API** (`/intelligence-backend/`) returns `202 Accepted` immediately.
-7. A **Celery worker** iterates the batch, running Gemini SWOT analysis on each item.
-8. Derived intelligence (title, summary, SWOT, opportunity rating, defeat strategy) is saved to PostgreSQL. **Raw Reddit text is never stored.**
-9. **Socket.IO** events push new ideas to the live dashboard in real time.
+1. **Extraction (Serverless Cron):** A Devvit scheduled job executes daily, fetching the last 24 hours of subreddit posts and applying a regex filter to isolate specific trend themes.  
+2. **Transmission (Secure Edge):** Matched posts are batched into a JSON array and transmitted via an HTTP POST webhook. The request is secured using a dynamic Authorization header.  
+3. **Ingestion (Stateless API):** The Flask API receives the payload, verifies the HMAC SHA-256 signature, and instantly returns a 202 Accepted to bypass serverless execution timeouts. The batch is dispatched to Redis.  
+4. **Analysis (Async Queue):** A persistent Celery worker iterates through the batch, executing inference via the google-genai SDK (gemini-2.5-flash-lite) to generate categorical research summaries and competitor analysis.  
+5. **Data Minimization:** Derived intelligence is persisted to PostgreSQL. **Raw Reddit text is permanently discarded in memory and never stored.**  
+6. **Real-time UI:** Socket.IO events push updates back to the frontend dashboards.
 
----
+## ---
 
-## Quick Start
+**🛠 Engineering Highlights (Tech Stack)**
 
-### Prerequisites
+This repository serves to demonstrate practical, production-ready implementation of the following technologies and methodologies:
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| [Docker](https://docs.docker.com/get-docker/) | 24+ | Container runtime |
-| [Node.js](https://nodejs.org/) | 18+ | Devvit CLI runtime |
-| [Devvit CLI](https://developers.reddit.com/docs/get-started) | latest | Reddit app development |
+* **Backend:** Python 3.12, Flask, SQLAlchemy, Celery, PostgreSQL, Redis.  
+* **Frontend / Serverless:** Node.js, TypeScript, React, Devvit SDK.  
+* **AI / ML Integration:** LLM Orchestration via the modern google-genai SDK (Inference only, no model training).  
+* **Systems Architecture:** Docker Compose containerization, Webhook design, Event-driven Background Workers, Constant-time HMAC Security.  
+* **Compliance Engineering:** Strict adherence to Data Minimization principles (GDPR/CCPA mindset) and platform TOS constraints.
 
-### 1. Start the Intelligence Backend
+## ---
 
-```bash
-cd intelligence-backend/
+**🚀 Open-Source Deployment Guide**
 
-# Create your environment file
-cp .env.example .env
-# Edit .env — fill in POSTGRES_PASSWORD, SECRET_KEY, and GOOGLE_API_KEY
+Developers can fork this repository to run their own Trend Analysis engine on any subreddit they moderate.
 
-# Build and launch all services
-docker compose up --build -d
+### **Prerequisites**
 
-# Verify services are healthy
-curl http://localhost:8000/api/v1/status
+* Docker and Docker Compose  
+* Node.js (v20+)  
+* A Reddit Account (with moderator access to a test subreddit)  
+* A Google Gemini API Key  
+* A Cloudflare account (or Ngrok) for secure local tunneling
 
-# Generate initial database migration
-docker compose exec backend flask db migrate -m "initial"
-docker compose exec backend flask db upgrade
-```
+### **Step 1: Deploy the Intelligence Backend**
 
-### 2. Expose the Backend via Static HTTPS Domain
+The backend runs entirely inside Docker.
 
-> [!IMPORTANT]
-> The Devvit scheduler dispatches webhooks to a **static HTTPS endpoint**. Running `docker compose` locally requires a persistent HTTPS domain mapped to your local port 8000. A [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) is the recommended approach for production-grade zero-trust ingress.
+1. Navigate to the backend directory:  
+   Bash  
+   cd intelligence-backend
 
-**Option A: Cloudflare Tunnel (recommended for production)**
-```bash
-# Install cloudflared
-# See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/
+2. Configure environment variables:  
+   Bash  
+   cp .env.example .env
 
-# Create a tunnel mapped to your domain
-cloudflared tunnel --url http://localhost:8000
-# Or configure a named tunnel with a static subdomain:
-cloudflared tunnel route dns <TUNNEL_ID> webhook.yourdomain.com
-```
+   *Add your GOOGLE\_API\_KEY and invent a strong DEVVIT\_WEBHOOK\_SECRET.*  
+3. Build and launch the 4-container stack:  
+   Bash  
+   docker compose up \--build \-d
 
-**Option B: ngrok (development only)**
-```bash
-ngrok http 8000
-# Note: free ngrok URLs are ephemeral — they change on restart.
-# Use a reserved domain (paid) or Cloudflare Tunnel for stability.
-```
+### **Step 2: Establish the Secure HTTPS Tunnel**
 
-The Devvit app is configured to send webhooks to:
-```
-https://webhook.legacysweatequity.com/api/v1/webhooks/devvit
-```
+Reddit's Devvit platform strictly requires https:// webhooks. To route traffic to your local Docker backend (localhost:8000), you must use a secure tunnel.
 
-If self-hosting, update the `WEBHOOK_URL` constant in `/scalable-social/src/main.tsx` to your own static HTTPS domain.
+* **Using Cloudflare Tunnels (Recommended for static domains):**  
+  Route a subdomain (e.g., webhook.yourdomain.com) to http://localhost:8000.  
+* **Using Ngrok (For temporary testing):**  
+  Bash  
+  ngrok http 8000
 
-### 3. Install the Devvit App
+### **Step 3: Configure and Install the Devvit Sensor**
 
-```bash
-cd scalable-social/
+1. Navigate to the Devvit app directory:  
+   Bash  
+   cd ../scalable-social  
+   npm install
 
-# Install dependencies
-npm install
+2. Log into the Devvit CLI:  
+   Bash  
+   npx devvit login
 
-# Log in to the Devvit CLI
-npx devvit login
+3. Update the WEBHOOK\_URL constant inside src/main.tsx to point to your secure tunnel:  
+   TypeScript  
+   const WEBHOOK\_URL \= 'https://\<YOUR\_TUNNEL\_DOMAIN\>/api/v1/webhooks/devvit';
 
-# Start a playtest on your test subreddit
-npx devvit playtest r/YOUR_TEST_SUBREDDIT
+4. Upload and install the app to your test subreddit:  
+   Bash  
+   npx devvit playtest r/YourTestSubreddit
 
-# Configure the webhook secret for authentication
-devvit settings set webhookSecret <your_secret_value>
-```
+5. **Crucial Security Step:** Supply your Devvit app with the webhook secret you defined in your backend .env file so it passes the HMAC check:  
+   Bash  
+   npx devvit settings set webhookSecret "YOUR\_SECRET\_HERE"
 
-On install, the app automatically schedules the `daily_demand_scan` job to run at 6:00 AM UTC.
+## ---
 
-### 4. Test the Pipeline
+**🛡 Compliance & Privacy**
 
-The scheduler runs automatically every 24 hours. To test immediately:
-1. Create several posts in your test subreddit containing demand signals:
-   > _"I wish there was an app that could track my houseplants' watering schedule"_
-   >
-   > _"Somebody should make a tool for comparing apartment leases side by side"_
-2. Trigger the scheduler manually via the Devvit CLI (or wait for the next scheduled run).
-3. Check the Celery worker logs for Gemini analysis output.
-4. View processed ideas on the dashboard at `http://localhost:8000`.
+This application is built defensively to comply with the Reddit Developer Terms and standard user privacy expectations:
+
+* **No Commercial Profiling:** The engine is strictly configured as an academic trend analyzer. It does not profile users or facilitate direct commercial exploitation.  
+* **Zero Raw Data Retention:** The PostgreSQL schema explicitly lacks the capacity to store verbatim post bodies or usernames.  
+* **Approved LLMs:** Utilizes Google Gemini, an explicitly whitelisted inference engine per Reddit's Generative AI rules.  
+* **Policies:** See the included [PRIVACY\_POLICY.md](https://www.google.com/search?q=PRIVACY_POLICY.md) and [TERMS\_OF\_SERVICE.md](https://www.google.com/search?q=TERMS_OF_SERVICE.md).
 
 ---
 
-## Project Structure
-
-```
-scalable-social-data-aggregator/
-├── intelligence-backend/           # Python/Flask intelligence engine
-│   ├── backend/
-│   │   ├── app/
-│   │   │   ├── __init__.py         # Flask app factory
-│   │   │   ├── api.py              # Webhook receiver (batched)
-│   │   │   ├── analysis_tasks.py   # Celery tasks (batch + Gemini)
-│   │   │   ├── extensions.py       # DB, Redis, Socket.IO instances
-│   │   │   ├── models.py           # SQLAlchemy ORM models
-│   │   │   └── main.py             # Dashboard blueprint
-│   │   ├── celery_app.py           # Celery application config
-│   │   ├── worker.py               # Celery worker entry point
-│   │   ├── wsgi.py                 # Gunicorn WSGI entry point
-│   │   ├── config.py               # Environment-based config
-│   │   └── Dockerfile              # Python 3.12 slim image
-│   ├── docker-compose.yml          # Full stack orchestration
-│   ├── entrypoint.sh               # DB migration runner
-│   ├── requirements.txt            # Python dependencies
-│   ├── Makefile                    # Secret generation helpers
-│   └── .env.example                # Environment template
-│
-├── scalable-social/                # Reddit Devvit scheduler app
-│   ├── src/
-│   │   ├── main.tsx                # Scheduler job + intent filter
-│   │   └── client/
-│   │       └── index.html          # Webview dashboard (leaderboard)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── devvit.json                 # Devvit app manifest
-│
-├── PRIVACY_POLICY.md               # Data handling transparency
-├── TERMS_OF_SERVICE.md             # Usage terms
-├── README.md                       # ← You are here
-└── .gitignore
-```
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `POSTGRES_USER` | Yes | PostgreSQL username |
-| `POSTGRES_PASSWORD` | Yes | PostgreSQL password |
-| `POSTGRES_DB` | Yes | PostgreSQL database name |
-| `SECRET_KEY` | Yes | Flask session secret |
-| `CELERY_BROKER_URL` | Yes | Redis URL for Celery broker |
-| `CELERY_RESULT_BACKEND_URL` | Yes | Redis URL for Celery results |
-| `GOOGLE_API_KEY` | Yes | Google AI (Gemini) API key |
-| `DEVVIT_WEBHOOK_SECRET` | Yes | Shared secret for webhook auth |
-| `UID` / `GID` | Yes | Host user/group IDs for Docker |
-
----
-
-## Webhook API Reference
-
-### `POST /api/v1/webhooks/devvit`
-
-Receives a batched array of demand-signal posts from the Devvit scheduler.
-
-**Request Body (batch):**
-```json
-[
-  {
-    "title": "I wish there was an app for...",
-    "body": "Full post body text here",
-    "subreddit": "AppIdeas"
-  },
-  {
-    "title": "Somebody should make a tool that...",
-    "body": "Another post body",
-    "subreddit": "AppIdeas"
-  }
-]
-```
-
-**Response:** `202 Accepted`
-```json
-{
-  "status": "accepted",
-  "batch_size": 2
-}
-```
-
-The batch is processed asynchronously by a Celery worker — the endpoint returns immediately to prevent Devvit `fetch()` timeout drops. A single-object payload is also accepted (auto-wrapped into a batch of 1).
-
----
-
-## Compliance
-
-- [Privacy Policy](PRIVACY_POLICY.md) — Details on data processing, retention, and third-party services.
-- [Terms of Service](TERMS_OF_SERVICE.md) — Usage terms, operator responsibilities, and disclaimers.
-
-**Key guarantee:** Raw Reddit post text is processed in-memory only and is **never persisted** to the database. Only AI-derived intelligence summaries are stored.
-
----
-
-## License
-
-This project is open source. See [LICENSE](LICENSE) for details.
+*Disclaimer: This project is an independent open-source proof of concept. It is not affiliated with, endorsed by, or sponsored by Reddit, Inc.*
