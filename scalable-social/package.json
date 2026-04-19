@@ -8,10 +8,10 @@
     "upload": "devvit upload"
   },
   "dependencies": {
-    "@devvit/public-api": "latest"
+    "@devvit/public-api": "0.11.0"
   },
   "devDependencies": {
-    "@devvit/tsconfig": "latest",
+    "@devvit/tsconfig": "0.11.0",
     "typescript": "^5.0.0"
   },
   "devvit": {

@@ -115,7 +115,7 @@ ngrok http 8000
 
 The Devvit app is configured to send webhooks to:
 ```
-https://webhook.legacysweatequity.com/api/webhooks/devvit
+https://webhook.legacysweatequity.com/api/v1/webhooks/devvit
 ```
 
 If self-hosting, update the `WEBHOOK_URL` constant in `/scalable-social/src/main.tsx` to your own static HTTPS domain.
@@ -133,6 +133,9 @@ npx devvit login
 
 # Start a playtest on your test subreddit
 npx devvit playtest r/YOUR_TEST_SUBREDDIT
+
+# Configure the webhook secret for authentication
+devvit settings set webhookSecret <your_secret_value>
 ```
 
 On install, the app automatically schedules the `daily_demand_scan` job to run at 6:00 AM UTC.
@@ -162,8 +165,7 @@ scalable-social-data-aggregator/
 │   │   │   ├── analysis_tasks.py   # Celery tasks (batch + Gemini)
 │   │   │   ├── extensions.py       # DB, Redis, Socket.IO instances
 │   │   │   ├── models.py           # SQLAlchemy ORM models
-│   │   │   ├── main.py             # Dashboard blueprint
-│   │   │   └── events.py           # Socket.IO event handlers
+│   │   │   └── main.py             # Dashboard blueprint
 │   │   ├── celery_app.py           # Celery application config
 │   │   ├── worker.py               # Celery worker entry point
 │   │   ├── wsgi.py                 # Gunicorn WSGI entry point
@@ -203,7 +205,7 @@ scalable-social-data-aggregator/
 | `CELERY_BROKER_URL` | Yes | Redis URL for Celery broker |
 | `CELERY_RESULT_BACKEND_URL` | Yes | Redis URL for Celery results |
 | `GOOGLE_API_KEY` | Yes | Google AI (Gemini) API key |
-| `DEVVIT_WEBHOOK_SECRET` | No | Shared secret for webhook auth |
+| `DEVVIT_WEBHOOK_SECRET` | Yes | Shared secret for webhook auth |
 | `UID` / `GID` | Yes | Host user/group IDs for Docker |
 
 ---

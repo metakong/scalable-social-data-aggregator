@@ -39,6 +39,15 @@ Devvit.configure({
   redditAPI: true,
 });
 
+Devvit.addSettings([
+  {
+    type: 'string',
+    name: 'webhookSecret',
+    label: 'Webhook Secret',
+    helpText: 'Secret token to authenticate with the webhook endpoint',
+  },
+]);
+
 // ---------------------------------------------------------------------------
 // Utility: classify a post title into a demand category
 // ---------------------------------------------------------------------------
@@ -212,14 +221,5 @@ Devvit.addCustomPostType({
     );
   },
 });
-
-Devvit.addSettings([
-  {
-    type: 'string',
-    name: 'webhookSecret',
-    label: 'Webhook Secret',
-    helpText: 'Secret token to authenticate with the webhook endpoint',
-  },
-]);
 
 export default Devvit;

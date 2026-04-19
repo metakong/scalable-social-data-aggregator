@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import os
+import hmac
 from typing import Any
 from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import select, desc
@@ -31,8 +32,8 @@ def devvit_webhook() -> tuple[Response, int]:
     batch to a Celery worker for asynchronous Gemini analysis.
     """
     auth_header = request.headers.get('Authorization')
-    expected_token = f"Bearer {os.getenv('DEVVIT_WEBHOOK_SECRET')}"
-    if auth_header != expected_token:
+    expected_secret = os.environ['DEVVIT_WEBHOOK_SECRET']
+    if not hmac.compare_digest(auth_header or '', f"Bearer {expected_secret}"):
         return jsonify({"error": "Unauthorized"}), 401
 
     payload: list | dict | None = request.get_json(silent=True)

@@ -53,15 +53,47 @@ document.addEventListener('DOMContentLoaded', () => {
         const card = document.createElement('div');
         card.className = 'idea-card';
         card.id = `idea-${idea.id}`;
-        const title = idea.ai_title || 'Analysis In Progress...';
-        const description = idea.ai_summary || 'AI-generated summary will appear here.';
 
-        card.innerHTML = `
-            <h3>${title}</h3>
-            <p><strong>AI-Generated Summary:</strong></p>
-            <div class="description-box">${description.replace(/\n/g, '<br>')}</div>
-            <p class="source-info"><strong>Source:</strong> <a href="${idea.source_url}" target="_blank" rel="noopener noreferrer">${idea.source_name}</a></p>
-            <div class="idea-status">Status: <span>${idea.status}</span></div>`;
+        const h3 = document.createElement('h3');
+        h3.textContent = idea.ai_title || 'Analysis In Progress...';
+
+        const pSummaryLabel = document.createElement('p');
+        const strongSummary = document.createElement('strong');
+        strongSummary.textContent = 'AI-Generated Summary:';
+        pSummaryLabel.appendChild(strongSummary);
+
+        const descBox = document.createElement('div');
+        descBox.className = 'description-box';
+        descBox.textContent = idea.ai_summary || 'AI-generated summary will appear here.';
+
+        const pSource = document.createElement('p');
+        pSource.className = 'source-info';
+        const strongSource = document.createElement('strong');
+        strongSource.textContent = 'Source: ';
+        pSource.appendChild(strongSource);
+
+        const aSource = document.createElement('a');
+        if (idea.source_url && idea.source_url.startsWith('devvit://')) {
+            aSource.href = idea.source_url;
+        }
+        aSource.target = '_blank';
+        aSource.rel = 'noopener noreferrer';
+        aSource.textContent = idea.source_name;
+        pSource.appendChild(aSource);
+
+        const divStatus = document.createElement('div');
+        divStatus.className = 'idea-status';
+        divStatus.textContent = 'Status: ';
+        const spanStatus = document.createElement('span');
+        spanStatus.textContent = idea.status;
+        divStatus.appendChild(spanStatus);
+
+        card.appendChild(h3);
+        card.appendChild(pSummaryLabel);
+        card.appendChild(descBox);
+        card.appendChild(pSource);
+        card.appendChild(divStatus);
+
         return card;
     }
 

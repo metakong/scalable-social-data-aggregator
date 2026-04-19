@@ -3,6 +3,5 @@
   "version": "0.1.0",
   "slug": "scalable-social-sensor",
   "description": "A Reddit sensor that aggregates demand signals into a webhook",
-  "author": "Open Source Community",
-  "permissions": ["http", "redis", "redditAPI"]
+  "author": "Open Source Community"
 }

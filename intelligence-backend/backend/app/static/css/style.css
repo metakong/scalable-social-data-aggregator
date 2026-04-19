@@ -70,30 +70,7 @@ header h1 {
     background-color: var(--status-error);
 }
 
-#start-cycle-btn {
-    margin-left: auto;
-    background-color: var(--primary-color);
-    color: #000;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    border-radius: 4px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
 
-#start-cycle-btn:hover {
-    background-color: #a75ff9;
-}
-
-#start-cycle-btn:active {
-    background-color: #8e44ad;
-}
-
-#start-cycle-btn.loading {
-    cursor: not-allowed;
-    background-color: #6c5b7b;
-}
 
 .progress-bar-container {
     width: 100%;

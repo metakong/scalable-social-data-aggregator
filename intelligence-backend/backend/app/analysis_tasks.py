@@ -164,7 +164,7 @@ def _run_gemini_analysis(
     """
 
     response = client.models.generate_content(
-        model='gemini-2.0-flash',
+        model='gemini-2.5-flash-lite',
         contents=prompt,
     )
 
