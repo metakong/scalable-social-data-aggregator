@@ -62,6 +62,7 @@ Devvit.addSchedulerJob({
   name: 'daily_demand_scan',
   onRun: async (_event, context) => {
     const { reddit, redis } = context;
+    const webhookSecret = await context.settings.get<string>('webhookSecret') ?? '';
 
     console.log('[Scheduler] Starting daily demand scan…');
 
@@ -131,7 +132,7 @@ Devvit.addSchedulerJob({
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer <YOUR_SECRET>'
+          'Authorization': `Bearer ${webhookSecret}`
         },
         body: JSON.stringify(matchedBatch),
       });
@@ -211,5 +212,14 @@ Devvit.addCustomPostType({
     );
   },
 });
+
+Devvit.addSettings([
+  {
+    type: 'string',
+    name: 'webhookSecret',
+    label: 'Webhook Secret',
+    helpText: 'Secret token to authenticate with the webhook endpoint',
+  },
+]);
 
 export default Devvit;

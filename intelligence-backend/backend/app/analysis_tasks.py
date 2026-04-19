@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
 from google.api_core import exceptions as google_exceptions
 
 from celery_app import celery_app
@@ -141,13 +141,12 @@ def _run_gemini_analysis(
     text: str,
     source_label: str,
 ) -> dict[str, Any]:
-    """Call Gemini 1.5 Flash and return the parsed JSON analysis dict."""
+    """Call Gemini 2.0 Flash and return the parsed JSON analysis dict."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY environment variable not set.")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    client = genai.Client(api_key=api_key)
 
     prompt = f"""
     You are an Academic Trend Analyzer researching digital community behaviors.
@@ -164,7 +163,10 @@ def _run_gemini_analysis(
     RAW TEXT EXCERPT: ---{text}---
     """
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model='gemini-2.0-flash',
+        contents=prompt,
+    )
 
     # Robust JSON extraction: strip markdown fences and conversational text
     match = re.search(r'\{.*\}', response.text, re.DOTALL)

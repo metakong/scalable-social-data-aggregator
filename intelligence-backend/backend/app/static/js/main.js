@@ -109,8 +109,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (current >= total && total > 0) {
             setTimeout(() => {
                 progressText.textContent = 'Cycle Complete';
-                startCycleBtn.disabled = false;
-                startCycleBtn.classList.remove('loading');
             }, 2000);
         }
     });
