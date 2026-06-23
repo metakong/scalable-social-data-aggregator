@@ -1,3 +1,15 @@
+> **Transparency Notice:** This documentation was authored by Claude Sonnet 4.6 (Anthropic) under direct human oversight — the same iterative, human-in-the-loop AI partnership methodology used to architect and build every system in this portfolio.
+
+> **Portfolio Context** | **Sean Deardorff** — Strategic Operations & Business Development
+>
+> This repository is an artifact of high-velocity, AI-partnered process engineering. It demonstrates how the author builds resilient, automated business machinery — translating the same decoupled logic, governance, and defensive optimization used to manage open sales territories and corporate operations into working code.
+>
+> **Career Connection:** This async webhook pipeline — designed, debugged, and deployed in an 11-hour sprint — demonstrates the same velocity and SOP-driven architecture Sean brought to First and Bowl (200+ corporate events acquired in 6 months from zero infrastructure) and the same modular process design deployed at eBay Enterprises (12-person SOP pilot scaled company-wide, anchoring a $400M revenue growth phase). Build the pipeline, instrument the feedback loop, prove the metrics, scale it.
+>
+> [View Full Portfolio →](https://github.com/metakong/sean-deardorff)
+
+---
+
 # **Scalable Social Data Aggregator**
 
 **An asynchronous, webhook-driven data pipeline bridging serverless TypeScript applications with an isolated Python/Flask intelligence backend.**
